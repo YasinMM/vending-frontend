@@ -6,6 +6,7 @@ import 'package:flutter_production_test/providers/active_discounts_notifier_prov
 import 'package:flutter_production_test/providers/active_machine_notifier_provider.dart';
 import 'package:flutter_production_test/providers/active_user_notifier_provider.dart';
 import 'package:flutter_production_test/services/product_service.dart';
+import 'package:flutter_production_test/widgets/loading_widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -21,9 +22,8 @@ class _NfcUsePageState extends ConsumerState<NfcUsePage>
   late final AnimationController _controller;
   late final Animation<double> _scaleAnimation;
 
-  // Long-press detection for the OK button
-  Timer? _okLongPressTimer;
-  bool _okLongPressTriggered = false;
+  // Loading indicator for network requests
+  bool _isLoadingDiscounts = false;
 
   Future<int> calculateFinalRawPrice(Map<String, dynamic> data) async {
     try {
@@ -39,6 +39,9 @@ class _NfcUsePageState extends ConsumerState<NfcUsePage>
   }
 
   Future<List<Discount>> setUserMachineDiscounts() async {
+    setState(() {
+      _isLoadingDiscounts = true;
+    });
     try {
       final serial = ref.read(activeMachineProvider);
       final response = await ProductService.getUserMachineDiscountList(
@@ -80,6 +83,12 @@ class _NfcUsePageState extends ConsumerState<NfcUsePage>
       }
     } on DioException {
       return [];
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoadingDiscounts = false;
+        });
+      }
     }
   }
 
@@ -105,28 +114,19 @@ class _NfcUsePageState extends ConsumerState<NfcUsePage>
   @override
   void dispose() {
     _controller.dispose();
-    _okLongPressTimer?.cancel();
     super.dispose();
   }
 
-  // Starts the 1-second long-press timer for the OK button.
-  // Holding longer than 1 second acts as the back button.
-  void _onOkPressDown() {
-    _okLongPressTriggered = false;
-    _okLongPressTimer = Timer(const Duration(milliseconds: 1000), () {
-      _okLongPressTriggered = true;
-      if (mounted) {
-        context.go("/");
-      }
-    });
+  // Back action (left button): goes back to the products page (same as the
+  // previous OK long-press behavior).
+  void _goBack() {
+    if (mounted) {
+      context.go("/");
+    }
   }
 
   void _onOkPressUp() {
-    _okLongPressTimer?.cancel();
-    _okLongPressTimer = null;
-    if (!_okLongPressTriggered) {
-      _cancelTransaction();
-    }
+    _cancelTransaction();
   }
 
   // OK tap acts like the "لغو تراکنش" button on this page
@@ -136,12 +136,15 @@ class _NfcUsePageState extends ConsumerState<NfcUsePage>
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('پرداخت با شاتکارت'),
-        centerTitle: true,
-      ),
-      body: Center(
+    return LoadingOverlay(
+      show: _isLoadingDiscounts,
+      message: 'در حال دریافت اطلاعات کاربر...',
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('پرداخت با شاتکارت'),
+          centerTitle: true,
+        ),
+        body: Center(
         child: Padding(
           padding: const EdgeInsets.all(24.0),
           child: Column(
@@ -178,36 +181,69 @@ class _NfcUsePageState extends ConsumerState<NfcUsePage>
               const SizedBox(height: 36),
 
               ElevatedButton(
-                onPressed: () async {
+                onPressed: _isLoadingDiscounts
+                    ? null
+                    : () async {
                   ref.read(activeUserProvider.notifier).setUser(1);
                   await setUserMachineDiscounts();
                   if(mounted){
                     context.push("/discounts");
                   }
                 },
-                child: const Text("کاربر 1"),
+                child: _isLoadingDiscounts
+                    ? const SizedBox(
+                        width: 22,
+                        height: 22,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2.5,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Text("کاربر 1"),
               ),
 
               ElevatedButton(
-                onPressed: () async {
+                onPressed: _isLoadingDiscounts
+                    ? null
+                    : () async {
                   ref.read(activeUserProvider.notifier).setUser(2);
                   await setUserMachineDiscounts();
                   if(mounted){
                     context.push("/discounts");
                   }
                 },
-                child: const Text("کاربر 2"),
+                child: _isLoadingDiscounts
+                    ? const SizedBox(
+                        width: 22,
+                        height: 22,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2.5,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Text("کاربر 2"),
               ),
 
               ElevatedButton(
-                onPressed: () async {
+                onPressed: _isLoadingDiscounts
+                    ? null
+                    : () async {
                   ref.read(activeUserProvider.notifier).setUser(3);
                   await setUserMachineDiscounts();
                   if(mounted){
                     context.push("/discounts");
                   }
                 },
-                child: const Text("کاربر 3"),
+                child: _isLoadingDiscounts
+                    ? const SizedBox(
+                        width: 22,
+                        height: 22,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2.5,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Text("کاربر 3"),
               ),
               const SizedBox(height: 24),
               SizedBox(
@@ -226,6 +262,7 @@ class _NfcUsePageState extends ConsumerState<NfcUsePage>
         ),
       ),
       bottomNavigationBar: _buildBottomNavBar(),
+      ),
     );
   }
 
@@ -239,23 +276,17 @@ class _NfcUsePageState extends ConsumerState<NfcUsePage>
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            // Left button: no action on this page
+            // Left button: back to the products page
             IconButton.filledTonal(
-              onPressed: () {},
-              icon: const Icon(Icons.arrow_back),
-              tooltip: 'گزینه قبلی',
+              onPressed: _goBack,
+              icon: const Icon(Icons.subdirectory_arrow_left, color: Colors.red),
+              tooltip: 'بازگشت',
             ),
             const SizedBox(width: 16),
 
             // OK button: confirm / done.
-            // Holding for more than 1 second cancels the transaction.
             GestureDetector(
-              onTapDown: (_) => _onOkPressDown(),
               onTapUp: (_) => _onOkPressUp(),
-              onTapCancel: () {
-                _okLongPressTimer?.cancel();
-                _okLongPressTimer = null;
-              },
               child: Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(

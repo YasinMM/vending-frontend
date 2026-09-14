@@ -6,6 +6,7 @@ import 'package:flutter_production_test/providers/active_discounts_notifier_prov
 import 'package:flutter_production_test/providers/active_machine_notifier_provider.dart';
 import 'package:flutter_production_test/providers/selected_products_notifier_provider.dart';
 import 'package:flutter_production_test/services/product_service.dart';
+import 'package:flutter_production_test/widgets/loading_widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
@@ -61,12 +62,16 @@ class _ProductPageState extends ConsumerState<ProductPage> {
   // Define the sequential choices (now supporting dynamic amounts)
   final List<ChoiceStep> _steps = [];
 
-  // Long-press detection for the OK button
-  Timer? _okLongPressTimer;
-  bool _okLongPressTriggered = false;
-
   // Selected payment option on the summary page (index into _summaryOptions)
   int _selectedSummaryOption = 0;
+
+  // Loading indicators for network requests
+  bool _isLoadingProducts = false;
+  bool _isStartingPayment = false;
+
+  // Cached final-price request for the summary page. Created once when the
+  // user moves past the last step so it isn't re-fetched on every rebuild.
+  Future<int>? _finalPriceFuture;
 
   // Payment options shown on the summary page, treated like regular options
   static const List<String> _summaryOptions = [
@@ -78,12 +83,14 @@ class _ProductPageState extends ConsumerState<ProductPage> {
 
   @override
   void dispose() {
-    _okLongPressTimer?.cancel();
     _pageController.dispose();
     super.dispose();
   }
 
   void getMachineProducts(String serial) async {
+    setState(() {
+      _isLoadingProducts = true;
+    });
     try {
       final response = await ProductService.getMachineProductList(serial);
 
@@ -226,6 +233,12 @@ class _ProductPageState extends ConsumerState<ProductPage> {
       }
     } on DioException {
       return;
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoadingProducts = false;
+        });
+      }
     }
   }
 
@@ -412,11 +425,17 @@ class _ProductPageState extends ConsumerState<ProductPage> {
   }
 
   Future<void> _startCardPayment() async {
+    setState(() {
+      _isStartingPayment = true;
+    });
     finalizeOrder();
     final discounts = await setMachinePinnedDiscounts();
     if (!mounted) {
       return;
     }
+    setState(() {
+      _isStartingPayment = false;
+    });
     if (discounts.isNotEmpty) {
       context.push("/discounts");
     } else {
@@ -424,22 +443,14 @@ class _ProductPageState extends ConsumerState<ProductPage> {
     }
   }
 
-  // Starts the 1-second long-press timer for the OK button.
-  // If held longer than 1 second, resets to the first step.
-  void _onOkPressDown() {
-    _okLongPressTriggered = false;
-    _okLongPressTimer = Timer(const Duration(milliseconds: 1000), () {
-      _okLongPressTriggered = true;
-      _resetOrder();
-    });
+  // Back action (left button): resets to the first step (same as the
+  // previous OK long-press behavior).
+  void _goBack() {
+    _resetOrder();
   }
 
   void _onOkPressUp() {
-    _okLongPressTimer?.cancel();
-    _okLongPressTimer = null;
-    if (!_okLongPressTriggered) {
-      _confirmSelection();
-    }
+    _confirmSelection();
   }
 
   void _goToNextPage() {
@@ -463,6 +474,16 @@ class _ProductPageState extends ConsumerState<ProductPage> {
             }
           }
         }
+
+        // Kick off the final price request once, before the summary page
+        // becomes visible, so the FutureBuilder doesn't re-create it on
+        // every rebuild (which would loop forever and never show a price).
+        _finalPriceFuture = calculateFinalRawPrice({
+          "discount_codes": [],
+          "machine_serial": ref.read(activeMachineProvider),
+          "product_serials": productSerials,
+          "quantities": quantities,
+        });
       });
     }
     if (_currentIndex < _steps.length) {
@@ -552,6 +573,7 @@ class _ProductPageState extends ConsumerState<ProductPage> {
     }
     setState(() {
       _currentIndex = 0;
+      _finalPriceFuture = null;
       for (final step in _steps) {
         step.selectedOption = null;
         step.selectedOptionTitle = null;
@@ -580,38 +602,44 @@ class _ProductPageState extends ConsumerState<ProductPage> {
           _goToPreviousPage();
         }
       },
-      child: Scaffold(
-        appBar: AppBar(
-          title: Text("ثبت سفارش"),
-          centerTitle: true,
-          leading: _currentIndex > 0
-              ? IconButton(
-                  icon: const Icon(Icons.arrow_back),
-                  onPressed: _goToPreviousPage,
-                  tooltip: 'بازگشت',
-                )
-              : null,
+      child: LoadingOverlay(
+        show: _isLoadingProducts || _isStartingPayment,
+        message: _isLoadingProducts
+            ? 'در حال دریافت اطلاعات دستگاه...'
+            : 'در حال دریافت تخفیف ها...',
+        child: Scaffold(
+          appBar: AppBar(
+            title: Text("ثبت سفارش"),
+            centerTitle: true,
+            leading: _currentIndex > 0
+                ? IconButton(
+                    icon: const Icon(Icons.arrow_back),
+                    onPressed: _goToPreviousPage,
+                    tooltip: 'بازگشت',
+                  )
+                : null,
+          ),
+          body: PageView.builder(
+            controller: _pageController,
+            physics: const NeverScrollableScrollPhysics(),
+            onPageChanged: (index) {
+              setState(() {
+                _currentIndex = index;
+                // First option of each step is selected by default
+                _selectDefaultOption(index);
+              });
+            },
+            // +1 to account for the final summary page
+            itemCount: _steps.length + 1,
+            itemBuilder: (context, index) {
+              if (index == _steps.length) {
+                return _buildSummaryPage();
+              }
+              return _buildChoicePage(index);
+            },
+          ),
+          bottomNavigationBar: _buildBottomNavBar(),
         ),
-        body: PageView.builder(
-          controller: _pageController,
-          physics: const NeverScrollableScrollPhysics(),
-          onPageChanged: (index) {
-            setState(() {
-              _currentIndex = index;
-              // First option of each step is selected by default
-              _selectDefaultOption(index);
-            });
-          },
-          // +1 to account for the final summary page
-          itemCount: _steps.length + 1,
-          itemBuilder: (context, index) {
-            if (index == _steps.length) {
-              return _buildSummaryPage();
-            }
-            return _buildChoicePage(index);
-          },
-        ),
-        bottomNavigationBar: _buildBottomNavBar(),
       ),
     );
   }
@@ -634,24 +662,18 @@ class _ProductPageState extends ConsumerState<ProductPage> {
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            // Left button: previous option
+            // Left button: back / reset to the first step
             IconButton.filledTonal(
-              onPressed: _selectPreviousOption,
-              icon: const Icon(Icons.arrow_back),
-              tooltip: 'گزینه قبلی',
+              onPressed: _goBack,
+              icon: const Icon(Icons.subdirectory_arrow_left, color: Colors.red),
+              tooltip: 'بازگشت',
               visualDensity: visualDensity,
             ),
             const SizedBox(width: 16),
 
             // OK button: confirm selection / finalize order.
-            // Holding for more than 1 second resets to the first step.
             GestureDetector(
-              onTapDown: (_) => _onOkPressDown(),
               onTapUp: (_) => _onOkPressUp(),
-              onTapCancel: () {
-                _okLongPressTimer?.cancel();
-                _okLongPressTimer = null;
-              },
               child: Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
@@ -885,15 +907,19 @@ class _ProductPageState extends ConsumerState<ProductPage> {
               ),
               const SizedBox(height: 20),
               FutureBuilder(
-                future: calculateFinalRawPrice({
-                  "discount_codes": [],
-                  "machine_serial": ref.read(activeMachineProvider),
-                  "product_serials": productSerials,
-                  "quantities": quantities,
-                }),
+                future: _finalPriceFuture,
                 builder: (context, snapshot) {
                   Widget result;
-                  if (snapshot.hasData) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    result = const Padding(
+                      padding: EdgeInsets.all(8.0),
+                      child: SizedBox(
+                        width: 24,
+                        height: 24,
+                        child: CircularProgressIndicator(strokeWidth: 2.5),
+                      ),
+                    );
+                  } else if (snapshot.hasData) {
                     final finalrawprice = snapshot.data;
                     result = Text(
                       'مبلغ نهایی: ${persianFormatter.format(finalrawprice! / 10)} تومان',
@@ -942,6 +968,7 @@ class _ProductPageState extends ConsumerState<ProductPage> {
                     index: 3,
                     label: 'پرداخت با کارتخوان',
                     color: Colors.purple,
+                    isLoading: _isStartingPayment,
                     onPressed: () {
                       _startCardPayment();
                     },
@@ -962,6 +989,7 @@ class _ProductPageState extends ConsumerState<ProductPage> {
     required String label,
     required Color color,
     required VoidCallback onPressed,
+    bool isLoading = false,
   }) {
     final isSelected = _selectedSummaryOption == index;
 
@@ -975,13 +1003,24 @@ class _ProductPageState extends ConsumerState<ProductPage> {
         ),
         elevation: isSelected ? 8 : 2,
       ),
-      onPressed: () {
-        setState(() {
-          _selectedSummaryOption = index;
-        });
-        onPressed();
-      },
-      child: Text(label, style: const TextStyle(color: Colors.white)),
+      onPressed: isLoading
+          ? null
+          : () {
+              setState(() {
+                _selectedSummaryOption = index;
+              });
+              onPressed();
+            },
+      child: isLoading
+          ? const SizedBox(
+              width: 22,
+              height: 22,
+              child: CircularProgressIndicator(
+                strokeWidth: 2.5,
+                color: Colors.white,
+              ),
+            )
+          : Text(label, style: const TextStyle(color: Colors.white)),
     );
   }
 }

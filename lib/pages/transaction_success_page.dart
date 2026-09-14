@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_production_test/providers/active_user_notifier_provider.dart';
 import 'package:flutter_production_test/providers/selected_products_notifier_provider.dart';
@@ -20,10 +18,6 @@ class _TransactionSuccessPageState
   late final AnimationController _controller;
   late final Animation<double> _scaleAnimation;
   late final Animation<double> _floatAnimation;
-
-  // Long-press detection for the OK button
-  Timer? _okLongPressTimer;
-  bool _okLongPressTriggered = false;
 
   @override
   void initState() {
@@ -51,26 +45,17 @@ class _TransactionSuccessPageState
   @override
   void dispose() {
     _controller.dispose();
-    _okLongPressTimer?.cancel();
     super.dispose();
   }
 
-  // Starts the 1-second long-press timer for the OK button.
-  // Holding longer than 1 second also returns home.
-  void _onOkPressDown() {
-    _okLongPressTriggered = false;
-    _okLongPressTimer = Timer(const Duration(milliseconds: 1000), () {
-      _okLongPressTriggered = true;
-      _goHome();
-    });
+  // Back action (left button): returns home (same as the previous OK
+  // long-press behavior).
+  void _goBack() {
+    _goHome();
   }
 
   void _onOkPressUp() {
-    _okLongPressTimer?.cancel();
-    _okLongPressTimer = null;
-    if (!_okLongPressTriggered) {
-      _goHome();
-    }
+    _goHome();
   }
 
   // OK acts like the "بازگشت" button on this page
@@ -183,23 +168,17 @@ class _TransactionSuccessPageState
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            // Left button: no action on this page
+            // Left button: back / return home
             IconButton.filledTonal(
-              onPressed: () {},
-              icon: const Icon(Icons.arrow_back),
-              tooltip: 'گزینه قبلی',
+              onPressed: _goBack,
+              icon: const Icon(Icons.subdirectory_arrow_left, color: Colors.red),
+              tooltip: 'بازگشت',
             ),
             const SizedBox(width: 16),
 
             // OK button: confirm / done.
-            // Holding for more than 1 second also returns home.
             GestureDetector(
-              onTapDown: (_) => _onOkPressDown(),
               onTapUp: (_) => _onOkPressUp(),
-              onTapCancel: () {
-                _okLongPressTimer?.cancel();
-                _okLongPressTimer = null;
-              },
               child: Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(

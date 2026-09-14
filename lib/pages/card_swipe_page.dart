@@ -7,6 +7,7 @@ import 'package:flutter_production_test/providers/active_machine_notifier_provid
 import 'package:flutter_production_test/providers/active_user_notifier_provider.dart';
 import 'package:flutter_production_test/providers/selected_products_notifier_provider.dart';
 import 'package:flutter_production_test/services/product_service.dart';
+import 'package:flutter_production_test/widgets/loading_widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
@@ -34,9 +35,13 @@ class _CardSwipePageState extends ConsumerState<CardSwipePage>
   final persianFormatter = NumberFormat.decimalPattern('fa');
   int? _calculatedAmount;
 
-  // Long-press detection for the OK button
-  Timer? _okLongPressTimer;
-  bool _okLongPressTriggered = false;
+  // Loading indicators for network requests
+  bool _isLoadingAmount = false;
+  bool _isCreatingTransaction = false;
+  bool _isDepositing = false;
+
+  // Whether the confirm button is busy with any payment request
+  bool get _isConfirmingPayment => _isCreatingTransaction || _isDepositing;
 
   bool get _isDepositMode => widget.isDepositMode;
 
@@ -89,16 +94,30 @@ class _CardSwipePageState extends ConsumerState<CardSwipePage>
   }
 
   Future<void> createWalletDeposit() async {
-    await ProductService.depositToWallet({
-      "creation_date": DateTime.now().toIso8601String(),
-      "user": ref.read(activeUserProvider),
-      "bank_serial": "123456",
-      "amount": widget.depositAmount,
+    setState(() {
+      _isDepositing = true;
     });
-    await ProductService.createUserWalletPurchase(_buildWalletPurchaseData());
+    try {
+      await ProductService.depositToWallet({
+        "creation_date": DateTime.now().toIso8601String(),
+        "user": ref.read(activeUserProvider),
+        "bank_serial": "123456",
+        "amount": widget.depositAmount,
+      });
+      await ProductService.createUserWalletPurchase(_buildWalletPurchaseData());
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isDepositing = false;
+        });
+      }
+    }
   }
 
   Future<void> _loadCalculatedAmount() async {
+    setState(() {
+      _isLoadingAmount = true;
+    });
     final amount = await calculateFinalRawPrice(_buildPriceRequestData());
     if (!mounted) {
       return;
@@ -106,12 +125,17 @@ class _CardSwipePageState extends ConsumerState<CardSwipePage>
 
     setState(() {
       _calculatedAmount = amount;
+      _isLoadingAmount = false;
     });
   }
 
   Future<bool> createCardPurchaseTransaction() async {
-    int user = ref.read(activeUserProvider);
-    String machineSerial = ref.read(activeMachineProvider);
+    setState(() {
+      _isCreatingTransaction = true;
+    });
+    try {
+      int user = ref.read(activeUserProvider);
+      String machineSerial = ref.read(activeMachineProvider);
 
     List<String> productSerials = [];
     List<int> quantities = [];
@@ -157,6 +181,13 @@ class _CardSwipePageState extends ConsumerState<CardSwipePage>
     }
 
     return true;
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isCreatingTransaction = false;
+        });
+      }
+    }
   }
 
   @override
@@ -184,28 +215,19 @@ class _CardSwipePageState extends ConsumerState<CardSwipePage>
   @override
   void dispose() {
     _controller.dispose();
-    _okLongPressTimer?.cancel();
     super.dispose();
   }
 
-  // Starts the 1-second long-press timer for the OK button.
-  // Holding longer than 1 second acts as the back button.
-  void _onOkPressDown() {
-    _okLongPressTriggered = false;
-    _okLongPressTimer = Timer(const Duration(milliseconds: 1000), () {
-      _okLongPressTriggered = true;
-      if (mounted) {
-        context.pop();
-      }
-    });
+  // Back action (left button): cancels the transaction (same as the
+  // previous OK long-press behavior).
+  void _goBack() {
+    if (mounted) {
+      context.pop();
+    }
   }
 
   void _onOkPressUp() {
-    _okLongPressTimer?.cancel();
-    _okLongPressTimer = null;
-    if (!_okLongPressTriggered) {
-      _cancelTransaction();
-    }
+    _cancelTransaction();
   }
 
   // OK tap acts like the "لغو تراکنش" button on this page
@@ -215,12 +237,17 @@ class _CardSwipePageState extends ConsumerState<CardSwipePage>
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(_isDepositMode ? 'افزایش اعتبار کیف پول' : 'پرداخت با کارتخوان'),
-        centerTitle: true,
-      ),
-      body: Center(
+    return LoadingOverlay(
+      show: _isLoadingAmount || _isConfirmingPayment,
+      message: _isConfirmingPayment
+          ? 'در حال ثبت تراکنش...'
+          : 'در حال محاسبه مبلغ...',
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(_isDepositMode ? 'افزایش اعتبار کیف پول' : 'پرداخت با کارتخوان'),
+          centerTitle: true,
+        ),
+        body: Center(
         child: Padding(
           padding: const EdgeInsets.all(24.0),
           child: Column(
@@ -268,7 +295,9 @@ class _CardSwipePageState extends ConsumerState<CardSwipePage>
               ),
               const SizedBox(height: 20),
               Text(
-                _calculatedAmount == null || _calculatedAmount == -1
+                _isLoadingAmount
+                    ? 'مبلغ: در حال محاسبه...'
+                    : _calculatedAmount == null || _calculatedAmount == -1
                     ? 'مبلغ افزایش اعتبار: --'
                     : _isDepositMode
                     ? 'مبلغ افزایش اعتبار: ${persianFormatter.format(_calculatedAmount! / 10)} تومان'
@@ -281,7 +310,13 @@ class _CardSwipePageState extends ConsumerState<CardSwipePage>
               ),
               const SizedBox(height: 36),
               ElevatedButton(
-                onPressed: () async {
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Theme.of(context).colorScheme.primary,
+                  foregroundColor: Colors.white,
+                ),
+                onPressed: _isConfirmingPayment
+                    ? null
+                    : () async {
                   if (_isDepositMode) {
                     await createWalletDeposit();
                   } else {
@@ -291,7 +326,16 @@ class _CardSwipePageState extends ConsumerState<CardSwipePage>
                     context.go("/transaction_success");
                   }
                 },
-                child: Text("کردم"),
+                child: _isConfirmingPayment
+                    ? const SizedBox(
+                        width: 22,
+                        height: 22,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2.5,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Text("کردم"),
               ),
               const SizedBox(height: 12),
               SizedBox(
@@ -309,6 +353,7 @@ class _CardSwipePageState extends ConsumerState<CardSwipePage>
         ),
       ),
       bottomNavigationBar: _buildBottomNavBar(),
+      ),
     );
   }
 
@@ -322,23 +367,17 @@ class _CardSwipePageState extends ConsumerState<CardSwipePage>
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            // Left button: no action on this page
+            // Left button: cancel / back
             IconButton.filledTonal(
-              onPressed: () {},
-              icon: const Icon(Icons.arrow_back),
-              tooltip: 'گزینه قبلی',
+              onPressed: _goBack,
+              icon: const Icon(Icons.subdirectory_arrow_left, color: Colors.red),
+              tooltip: 'بازگشت',
             ),
             const SizedBox(width: 16),
 
             // OK button: confirm / done.
-            // Holding for more than 1 second cancels the transaction.
             GestureDetector(
-              onTapDown: (_) => _onOkPressDown(),
               onTapUp: (_) => _onOkPressUp(),
-              onTapCancel: () {
-                _okLongPressTimer?.cancel();
-                _okLongPressTimer = null;
-              },
               child: Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(

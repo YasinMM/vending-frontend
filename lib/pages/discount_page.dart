@@ -7,6 +7,7 @@ import 'package:flutter_production_test/providers/active_machine_notifier_provid
 import 'package:flutter_production_test/providers/active_user_notifier_provider.dart';
 import 'package:flutter_production_test/providers/selected_products_notifier_provider.dart';
 import 'package:flutter_production_test/services/product_service.dart';
+import 'package:flutter_production_test/widgets/loading_widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
@@ -29,10 +30,6 @@ class _DiscountPageState extends ConsumerState<DiscountPage> {
   int? _finalPrice;
   int? _walletBalance;
 
-  // Long-press detection for the OK button
-  Timer? _okLongPressTimer;
-  bool _okLongPressTriggered = false;
-
   // Index of the currently highlighted option. Options are the discounts
   // followed by one extra "confirm" pseudo-option at the end.
   int _selectedOptionIndex = 0;
@@ -40,6 +37,11 @@ class _DiscountPageState extends ConsumerState<DiscountPage> {
   // Selected payment button on the bottom (index into _paymentActions)
   int _selectedPaymentIndex = 0;
   bool _paymentMode = false; // true when selection hovers the bottom buttons
+
+  // Loading indicators for network requests
+  bool _isLoadingPrice = false;
+  bool _isLoadingWallet = false;
+  bool _isCreatingTransaction = false;
 
   bool _isDiscountAvailable(
     Discount discount,
@@ -55,6 +57,9 @@ class _DiscountPageState extends ConsumerState<DiscountPage> {
   }
 
   Future<int> calculateFinalPrice(Map<String, dynamic> data) async {
+    setState(() {
+      _isLoadingPrice = true;
+    });
     try {
       final response = await ProductService.getFinalPriceFromList(data);
       if (response.data.length != 0) {
@@ -64,6 +69,12 @@ class _DiscountPageState extends ConsumerState<DiscountPage> {
       }
     } on DioException {
       return -1;
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoadingPrice = false;
+        });
+      }
     }
   }
 
@@ -94,6 +105,10 @@ class _DiscountPageState extends ConsumerState<DiscountPage> {
       return;
     }
 
+    setState(() {
+      _isLoadingWallet = true;
+    });
+
     try {
       final response = await ProductService.getWalletByUser(user);
       final data = response.data;
@@ -114,6 +129,12 @@ class _DiscountPageState extends ConsumerState<DiscountPage> {
       setState(() {
         _walletBalance = null;
       });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoadingWallet = false;
+        });
+      }
     }
   }
 
@@ -131,8 +152,12 @@ class _DiscountPageState extends ConsumerState<DiscountPage> {
   }
 
   Future<bool> createCardPurchaseTransaction() async {
-    int user = ref.read(activeUserProvider);
-    String machineSerial = ref.read(activeMachineProvider);
+    setState(() {
+      _isCreatingTransaction = true;
+    });
+    try {
+      int user = ref.read(activeUserProvider);
+      String machineSerial = ref.read(activeMachineProvider);
 
     List<String> productSerials = [];
     List<int> quantities = [];
@@ -145,7 +170,7 @@ class _DiscountPageState extends ConsumerState<DiscountPage> {
     }
 
     final selectedDiscountCodes = ref
-        .watch(activeDiscountsProvider)
+        .read(activeDiscountsProvider)
         .where((d) => d.selected)
         .map((d) => d.code)
         .toList();
@@ -181,6 +206,13 @@ class _DiscountPageState extends ConsumerState<DiscountPage> {
     }
 
     return true;
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isCreatingTransaction = false;
+        });
+      }
+    }
   }
 
 
@@ -193,55 +225,26 @@ class _DiscountPageState extends ConsumerState<DiscountPage> {
 
   @override
   void dispose() {
-    _okLongPressTimer?.cancel();
     super.dispose();
   }
 
   // Moves the highlight to the next option (discounts, then payment buttons).
-  // Skips over disabled (unavailable) discounts.
+  // Skips over disabled (unavailable) discounts. Wraps around from the
+  // confirm pseudo-option back to the first discount.
   void _selectNextOption(int discountCount, List<Discount> orderedDiscounts) {
     setState(() {
       if (!_paymentMode) {
-        if (_selectedOptionIndex < discountCount) {
+        if (_selectedOptionIndex >= discountCount) {
+          // Wrap around: confirm pseudo-option goes back to the first option
+          _selectedOptionIndex = 0;
+          _skipUnavailableDiscounts(orderedDiscounts, discountCount, forward: true);
+        } else {
           _selectedOptionIndex++;
           _skipUnavailableDiscounts(orderedDiscounts, discountCount, forward: true);
         }
       } else {
         _selectedPaymentIndex =
             (_selectedPaymentIndex + 1) % _paymentButtonCount;
-      }
-    });
-  }
-
-  // Moves the highlight to the previous option.
-  // Wraps around from the first option to the last, and skips
-  // over disabled (unavailable) discounts.
-  void _selectPreviousOption(
-    int discountCount,
-    List<Discount> orderedDiscounts,
-  ) {
-    setState(() {
-      if (_paymentMode) {
-        if (_selectedPaymentIndex > 0) {
-          _selectedPaymentIndex--;
-        } else {
-          // Back to the confirm pseudo-option
-          _paymentMode = false;
-          _selectedOptionIndex = discountCount;
-        }
-      } else {
-        // Wrap around: first option goes back to the last option
-        // (the confirm pseudo-option when at index 0)
-        if (_selectedOptionIndex == 0) {
-          _selectedOptionIndex = discountCount;
-        } else {
-          _selectedOptionIndex--;
-          _skipUnavailableDiscounts(
-            orderedDiscounts,
-            discountCount,
-            forward: false,
-          );
-        }
       }
     });
   }
@@ -321,33 +324,21 @@ class _DiscountPageState extends ConsumerState<DiscountPage> {
     }
   }
 
-  // Starts the 1-second long-press timer for the OK button.
-  // In discount mode: goes back to the products page.
-  // In payment mode: moves the selection back to the discounts grid.
-  void _onOkPressDown() {
-    _okLongPressTriggered = false;
-    _okLongPressTimer = Timer(const Duration(milliseconds: 1000), () {
-      _okLongPressTriggered = true;
-      if (!mounted) {
-        return;
-      }
-      if (_paymentMode) {
-        setState(() {
-          _paymentMode = false;
-          _selectedOptionIndex = 0;
-        });
-      } else {
-        context.go("/");
-      }
-    });
+  // Back action (left button): in payment mode moves the selection back to
+  // the discounts grid; otherwise goes back to the products page.
+  void _goBack() {
+    if (_paymentMode) {
+      setState(() {
+        _paymentMode = false;
+        _selectedOptionIndex = 0;
+      });
+    } else {
+      context.go("/");
+    }
   }
 
   void _onOkPressUp(List<Discount> orderedDiscounts) {
-    _okLongPressTimer?.cancel();
-    _okLongPressTimer = null;
-    if (!_okLongPressTriggered) {
-      _confirmSelection(orderedDiscounts);
-    }
+    _confirmSelection(orderedDiscounts);
   }
 
   // Number of payment buttons currently visible at the bottom
@@ -420,13 +411,51 @@ class _DiscountPageState extends ConsumerState<DiscountPage> {
     } else if (walletVisible && _walletBalance != null && _finalPrice != null) {
       // کیف پول / افزایش اعتبار
       final depositAmount = _finalPrice! - _walletBalance!;
-      if (mounted) {
+      if (depositAmount <= 0) {
+        // Wallet balance is enough: complete the purchase directly from the
+        // wallet instead of entering deposit (increase balance) mode.
+        setState(() {
+          _isCreatingTransaction = true;
+        });
+        try {
+          await _createWalletPurchaseTransaction();
+        } finally {
+          if (mounted) {
+            setState(() {
+              _isCreatingTransaction = false;
+            });
+          }
+        }
+        if (mounted) {
+          context.go("/transaction_success");
+        }
+      } else if (mounted) {
         context.push("/card_swipe", extra: {
           "depositAmount": depositAmount,
           "purchaseAmount": _finalPrice!,
         });
       }
     }
+  }
+
+  // Creates a purchase transaction paid entirely from the wallet balance.
+  Future<void> _createWalletPurchaseTransaction() async {
+    final selectedProducts = ref.read(selectedProductsProvider);
+    final selectedDiscountCodes = ref
+        .read(activeDiscountsProvider)
+        .where((d) => d.selected)
+        .map((d) => d.code)
+        .toList();
+
+    await ProductService.createUserWalletPurchase({
+      "creation_date": DateTime.now().toIso8601String(),
+      "discount_codes": selectedDiscountCodes,
+      "user": ref.read(activeUserProvider),
+      "machine_serial": ref.read(activeMachineProvider),
+      "amount": _finalPrice,
+      "product_serials": selectedProducts.map((p) => p.serial).toList(),
+      "quantities": selectedProducts.map((p) => p.quantity).toList(),
+    });
   }
 
   @override
@@ -456,9 +485,16 @@ class _DiscountPageState extends ConsumerState<DiscountPage> {
         return 0;
       });
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('تکمیل خرید'), centerTitle: true),
-      body: Padding(
+    return LoadingOverlay(
+      show: _isLoadingPrice || _isLoadingWallet || _isCreatingTransaction,
+      message: _isCreatingTransaction
+          ? 'در حال ثبت تراکنش...'
+          : _isLoadingWallet
+          ? 'در حال دریافت موجودی کیف پول...'
+          : 'در حال محاسبه قیمت نهایی...',
+      child: Scaffold(
+        appBar: AppBar(title: const Text('تکمیل خرید'), centerTitle: true),
+        body: Padding(
         padding: const EdgeInsets.all(16.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.end,
@@ -740,7 +776,9 @@ class _DiscountPageState extends ConsumerState<DiscountPage> {
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
                   Text(
-                    _finalPrice == null
+                    _isLoadingPrice
+                        ? 'قیمت نهایی: در حال محاسبه...'
+                        : _finalPrice == null
                         ? 'قیمت نهایی: --'
                         : _finalPrice == 0
                         ? 'قیمت نهایی: رایگان'
@@ -789,7 +827,7 @@ class _DiscountPageState extends ConsumerState<DiscountPage> {
                               const SizedBox(height: 8),
                               Text(
                                 _walletBalance == null
-                                    ? 'موجودی: --'
+                                    ? (_isLoadingWallet ? 'موجودی: در حال دریافت...' : 'موجودی: --')
                                     : 'موجودی: ${persianFormatter.format(_walletBalance! / 10)} ت',
                                 textDirection: .rtl,
                                 style: const TextStyle(
@@ -809,6 +847,7 @@ class _DiscountPageState extends ConsumerState<DiscountPage> {
         ),
       ),
       bottomNavigationBar: _buildBottomNavBar(orderedDiscounts),
+      ),
     );
   }
 
@@ -821,6 +860,7 @@ class _DiscountPageState extends ConsumerState<DiscountPage> {
     required List<Discount> orderedDiscounts,
   }) {
     final isHighlighted = _paymentMode && _selectedPaymentIndex == index;
+    final isBusy = _isCreatingTransaction;
 
     return ElevatedButton(
       style: ElevatedButton.styleFrom(
@@ -832,7 +872,7 @@ class _DiscountPageState extends ConsumerState<DiscountPage> {
         ),
         elevation: isHighlighted ? 8 : 2,
       ),
-      onPressed: _isPaymentButtonEnabled(index)
+      onPressed: _isPaymentButtonEnabled(index) && !isBusy
           ? () {
               setState(() {
                 _paymentMode = true;
@@ -841,7 +881,16 @@ class _DiscountPageState extends ConsumerState<DiscountPage> {
               _triggerPaymentButton(index, orderedDiscounts);
             }
           : null,
-      child: Text(label, style: const TextStyle(fontSize: 16, color: Colors.white)),
+      child: isBusy
+          ? const SizedBox(
+              width: 22,
+              height: 22,
+              child: CircularProgressIndicator(
+                strokeWidth: 2.5,
+                color: Colors.white,
+              ),
+            )
+          : Text(label, style: const TextStyle(fontSize: 16, color: Colors.white)),
     );
   }
 
@@ -855,24 +904,17 @@ class _DiscountPageState extends ConsumerState<DiscountPage> {
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            // Left button: previous option
+            // Left button: back (same as the previous OK long-press behavior)
             IconButton.filledTonal(
-              onPressed: () =>
-                  _selectPreviousOption(orderedDiscounts.length, orderedDiscounts),
-              icon: const Icon(Icons.arrow_back),
-              tooltip: 'گزینه قبلی',
+              onPressed: _goBack,
+              icon: const Icon(Icons.subdirectory_arrow_left, color: Colors.red),
+              tooltip: 'بازگشت',
             ),
             const SizedBox(width: 16),
 
             // OK button: confirm selection.
-            // Holding for more than 1 second goes back to the product page.
             GestureDetector(
-              onTapDown: (_) => _onOkPressDown(),
               onTapUp: (_) => _onOkPressUp(orderedDiscounts),
-              onTapCancel: () {
-                _okLongPressTimer?.cancel();
-                _okLongPressTimer = null;
-              },
               child: Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
