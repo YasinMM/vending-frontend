@@ -3,9 +3,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_production_test/pages/card_swipe_page.dart';
 import 'package:flutter_production_test/pages/transaction_success_page.dart';
 import 'package:flutter_production_test/pages/discount_page.dart';
+import 'package:flutter_production_test/pages/error_simulation_page.dart';
 import 'package:flutter_production_test/pages/nfc_use_page.dart';
 import 'package:flutter_production_test/pages/product_page.dart';
+import 'package:flutter_production_test/services/critical_error_watch_service.dart';
 import 'package:flutter_production_test/services/inactivity_service.dart';
+import 'package:flutter_production_test/widgets/error_simulation_button.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -53,6 +56,10 @@ final _router = GoRouter(
       path: '/transaction_success',
       builder: (context, state) => const TransactionSuccessPage(),
     ),
+    GoRoute(
+      path: ErrorSimulationButton.routePath,
+      builder: (context, state) => const ErrorSimulationPage(),
+    ),
   ],
 );
 
@@ -83,6 +90,9 @@ class _MainAppState extends ConsumerState<MainApp> {
     // interaction the app resets to its default state).
     InactivityService.instance.configure(ref, _router);
     InactivityService.instance.reset();
+    // Watch for critical error logs created for this machine (e.g. simulated
+    // from the error simulation page in another tab) and alert the user.
+    CriticalErrorWatchService.instance.start(ref, _router);
   }
 
   @override
@@ -96,7 +106,24 @@ class _MainAppState extends ConsumerState<MainApp> {
         title: 'Shot Demo',
         theme: ThemeData(
           colorScheme: ColorScheme.fromSeed(seedColor: Colors.brown),),
-            routerConfig: _router,
+        routerConfig: _router,
+        // Show the error simulation button in the corner of every page.
+        builder: (context, child) {
+          // The default ReadingOrderTraversalPolicy sorts focus candidates by
+          // their screen rects, which reads the Overlay's (_RenderTheater)
+          // size during the startup view-focus change — before the first
+          // frame is laid out — and crashes with "RenderBox was not laid
+          // out". WidgetOrderTraversalPolicy needs no geometry, so it's safe.
+          return FocusTraversalGroup(
+            policy: WidgetOrderTraversalPolicy(),
+            child: Stack(
+              children: [
+                ?child,
+                const ErrorSimulationButton(),
+              ],
+            ),
+          );
+        },
       ),
     );
   }

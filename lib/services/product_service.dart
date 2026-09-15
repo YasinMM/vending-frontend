@@ -38,5 +38,25 @@ class ProductService {
     return DioClient.dio.post('/deposittowallet', data: data);
   }
 
+  static Future<Response> getErrorDictionaryList() {
+    return DioClient.dio.get('/geterrordictionarylist');
+  }
 
+  static Future<Response> getMachineList() {
+    return DioClient.dio.get('/getmachinelist');
+  }
+
+  static Future<Response> getSensorList({String? machineSerial}) {
+    final query = machineSerial != null ? '?machine=$machineSerial' : '';
+    return DioClient.dio.get('/getsensorlist$query');
+  }
+
+  static Future<Response> createErrorLog(Map<String, dynamic> data) {
+    return DioClient.dio.post('/createerrorlog', data: data);
+  }
+
+  static Future<Response> getCriticalErrorLogs(String machineSerial, {String? sinceIso}) {
+    final query = sinceIso != null ? '?since=${Uri.encodeComponent(sinceIso)}' : '';
+    return DioClient.dio.get('/getcriticalerrorlogs/$machineSerial$query');
+  }
 }
