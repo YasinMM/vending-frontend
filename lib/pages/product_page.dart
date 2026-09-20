@@ -370,36 +370,6 @@ class _ProductPageState extends ConsumerState<ProductPage> {
     });
   }
 
-  // Moves the selection to the previous option within the current step
-  void _selectPreviousOption() {
-    if (_currentIndex >= _steps.length) {
-      // Summary page: cycle through payment options
-      setState(() {
-        _selectedSummaryOption =
-            (_selectedSummaryOption - 1 + _summaryOptions.length) %
-                _summaryOptions.length;
-      });
-      return;
-    }
-    final step = _steps[_currentIndex];
-    if (step.options.isEmpty) {
-      return;
-    }
-    final currentIdx = step.options.indexWhere(
-      (o) => o.serial == step.selectedOption,
-    );
-    final prevIdx =
-        (currentIdx - 1 + step.options.length) % step.options.length;
-    final option = step.options[prevIdx];
-    setState(() {
-      step.selectedOption = option.serial;
-      step.selectedOptionTitle = option.title;
-      if (_currentIndex == 0) {
-        _updateDoublePricing(option.serial);
-      }
-    });
-  }
-
   // Confirms the current selection: advances to the next step,
   // or triggers the selected payment option on the summary page.
   void _confirmSelection() {
@@ -418,8 +388,11 @@ class _ProductPageState extends ConsumerState<ProductPage> {
         _startCardPayment();
         break;
       case 'subscription':
-      case 'phone':
         // Not implemented yet
+        break;
+      case 'phone':
+        finalizeOrder();
+        context.push("/phone_payment");
         break;
     }
   }
@@ -962,7 +935,10 @@ class _ProductPageState extends ConsumerState<ProductPage> {
                     index: 2,
                     label: 'پرداخت با تلفن همراه',
                     color: Colors.blueAccent,
-                    onPressed: () {},
+                    onPressed: () {
+                      finalizeOrder();
+                      context.push("/phone_payment");
+                    },
                   ),
                   _buildPaymentButton(
                     index: 3,

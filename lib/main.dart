@@ -5,6 +5,8 @@ import 'package:flutter_production_test/pages/transaction_success_page.dart';
 import 'package:flutter_production_test/pages/discount_page.dart';
 import 'package:flutter_production_test/pages/error_simulation_page.dart';
 import 'package:flutter_production_test/pages/nfc_use_page.dart';
+import 'package:flutter_production_test/pages/online_payment_page.dart';
+import 'package:flutter_production_test/pages/phone_payment_page.dart';
 import 'package:flutter_production_test/pages/product_page.dart';
 import 'package:flutter_production_test/services/critical_error_watch_service.dart';
 import 'package:flutter_production_test/services/inactivity_service.dart';
@@ -51,6 +53,14 @@ final _router = GoRouter(
     GoRoute(
       path: '/nfc_use',
       builder: (context, state) => const NfcUsePage(),
+    ),
+    GoRoute(
+      path: '/phone_payment',
+      builder: (context, state) => const PhonePaymentPage(),
+    ),
+    GoRoute(
+      path: '/online_payment',
+      builder: (context, state) => const OnlinePaymentPage(),
     ),
     GoRoute(
       path: '/transaction_success',
