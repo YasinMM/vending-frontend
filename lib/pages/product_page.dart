@@ -477,6 +477,12 @@ class _ProductPageState extends ConsumerState<ProductPage> {
         if (_currentIndex < _steps.length) {
           _steps[_currentIndex].selectedOption = null;
         }
+
+        // Going back to the summary page restarts the payment highlight on
+        // the first option.
+        if (_currentIndex == _steps.length) {
+          _selectedSummaryOption = 0;
+        }
       });
 
       _pageController.previousPage(
@@ -547,6 +553,8 @@ class _ProductPageState extends ConsumerState<ProductPage> {
     setState(() {
       _currentIndex = 0;
       _finalPriceFuture = null;
+      // The summary page highlight always starts on the first option.
+      _selectedSummaryOption = 0;
       for (final step in _steps) {
         step.selectedOption = null;
         step.selectedOptionTitle = null;
@@ -600,6 +608,12 @@ class _ProductPageState extends ConsumerState<ProductPage> {
                 _currentIndex = index;
                 // First option of each step is selected by default
                 _selectDefaultOption(index);
+                // Every time the summary page is shown, the highlight starts
+                // again on the first payment option (re-entering the summary
+                // page via the back button keeps the old highlight otherwise).
+                if (index == _steps.length) {
+                  _selectedSummaryOption = 0;
+                }
               });
             },
             // +1 to account for the final summary page

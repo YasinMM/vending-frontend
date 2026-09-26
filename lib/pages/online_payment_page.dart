@@ -153,25 +153,31 @@ class _OnlinePaymentPageState extends State<OnlinePaymentPage>
     }
   }
 
+  // Maps one discount entry of the backend to the local model.
+  _OnlineDiscount _toOnlineDiscount(Map<String, dynamic> d, String serial) {
+    final machineSerials = List<String>.from(d["machine_serials"]);
+    return _OnlineDiscount(
+      code: d["code"],
+      name: d["name"],
+      description: d["description"],
+      productLimit: d["product_limit"] == true,
+      productSerials: d["product_serials"] == null
+          ? <String>[]
+          : List<String>.from(d["product_serials"]),
+      pinned: (machineSerials.contains(serial))
+          ? d["is_pinned"][machineSerials.indexOf(serial)]
+          : false,
+    );
+  }
+
   Future<List<_OnlineDiscount>> _fetchPinnedDiscounts(String serial) async {
     final response = await ProductService.getMachinePinnedDiscountList(serial);
-    final List<_OnlineDiscount> discounts = [];
-    if (response.data.length != 0) {
-      for (Map<String, dynamic> d in response.data) {
-        var machineSerials = List<String>.from(d["machine_serials"]);
-        discounts.add(
-          _OnlineDiscount(
-            code: d["code"],
-            name: d["name"],
-            description: d["description"],
-            pinned: (machineSerials.contains(serial))
-                ? d["is_pinned"][machineSerials.indexOf(serial)]
-                : false,
-          ),
-        );
-      }
+    if (response.data.length == 0) {
+      return [];
     }
-    return discounts;
+    return (response.data as List)
+        .map((d) => _toOnlineDiscount(Map<String, dynamic>.from(d), serial))
+        .toList();
   }
 
   Future<List<_OnlineDiscount>> _fetchUserDiscounts(
@@ -182,23 +188,12 @@ class _OnlinePaymentPageState extends State<OnlinePaymentPage>
       serial,
       user,
     );
-    final List<_OnlineDiscount> discounts = [];
-    if (response.data.length != 0) {
-      for (Map<String, dynamic> d in response.data) {
-        var machineSerials = List<String>.from(d["machine_serials"]);
-        discounts.add(
-          _OnlineDiscount(
-            code: d["code"],
-            name: d["name"],
-            description: d["description"],
-            pinned: (machineSerials.contains(serial))
-                ? d["is_pinned"][machineSerials.indexOf(serial)]
-                : false,
-          ),
-        );
-      }
+    if (response.data.length == 0) {
+      return [];
     }
-    return discounts;
+    return (response.data as List)
+        .map((d) => _toOnlineDiscount(Map<String, dynamic>.from(d), serial))
+        .toList();
   }
 
   Future<void> _loadWalletBalance() async {
@@ -240,6 +235,51 @@ class _OnlinePaymentPageState extends State<OnlinePaymentPage>
     return byCode.values.toList();
   }
 
+  // The products the customer picked in the main tab, taken from the payload.
+  Set<String> get _payloadProductSerials {
+    final payload = _readPayload();
+    final raw = payload?['product_serials'];
+    if (raw is! List) {
+      return <String>{};
+    }
+    return raw.map((e) => e.toString()).toSet();
+  }
+
+  // Same rule as the discount page: a product-limited discount is only usable
+  // when at least one of the ordered products is part of its product list.
+  bool _isDiscountAvailable(_OnlineDiscount discount) {
+    if (!discount.productLimit || discount.productSerials.isEmpty) {
+      return true;
+    }
+    return _payloadProductSerials.any(discount.productSerials.contains);
+  }
+
+  // A discount can only be selected while it is available (the price request
+  // is skipped for unavailable ones), and it is silently dropped if it turned
+  // out to be unavailable in the meantime.
+  List<String> get _selectedDiscountCodes => _allDiscounts
+      .where((d) => d.selected && _isDiscountAvailable(d))
+      .map((d) => d.code)
+      .toList();
+
+  // The wallet button is only usable when the balance is known and above zero.
+  // A zero or unknown balance keeps it disabled, since there would be nothing
+  // to charge the purchase against.
+  bool get _isWalletButtonEnabled =>
+      !_isPaying &&
+      !_isLoadingWallet &&
+      _walletBalance != null &&
+      _walletBalance! > 0 &&
+      _finalPrice != null &&
+      _finalPrice! > 0;
+
+  // Between a positive balance and the final price: the wallet is topped up
+  // with the missing amount ("افزایش اعتبار") instead of paying directly.
+  bool get _needsWalletTopUp =>
+      _walletBalance != null &&
+      _finalPrice != null &&
+      _walletBalance! < _finalPrice!;
+
   // Calculates the final price from the backend based on the currently
   // selected discounts (same request the card flow / discount page use).
   Future<void> _updateFinalPrice() async {
@@ -252,10 +292,7 @@ class _OnlinePaymentPageState extends State<OnlinePaymentPage>
     });
     try {
       final response = await ProductService.getFinalPriceFromList({
-        "discount_codes": _allDiscounts
-            .where((d) => d.selected)
-            .map((d) => d.code)
-            .toList(),
+        "discount_codes": _selectedDiscountCodes,
         "machine_serial": payload["machine_serial"],
         "product_serials": payload["product_serials"],
         "quantities": payload["quantities"],
@@ -279,11 +316,6 @@ class _OnlinePaymentPageState extends State<OnlinePaymentPage>
       });
     }
   }
-
-  List<String> get _selectedDiscountCodes => _allDiscounts
-      .where((d) => d.selected)
-      .map((d) => d.code)
-      .toList();
 
   // Acts the same as the "pay with card" button on the summary page:
   // first calculates the final price (the backend requires the "amount"
@@ -326,26 +358,50 @@ class _OnlinePaymentPageState extends State<OnlinePaymentPage>
     }
   }
 
-  // Acts the same as the "pay with wallet" button on the discount page:
-  // creates a wallet purchase transaction with the selected discounts.
+  // Builds the wallet purchase body, exactly like the card-swipe page does in
+  // "increase wallet balance" mode, so both flows post the same transaction.
+  Map<String, dynamic> _buildWalletPurchaseData(int amount) {
+    final payload = _readPayload();
+    return {
+      "creation_date": DateTime.now().toIso8601String(),
+      "discount_codes": _selectedDiscountCodes,
+      "user": _user,
+      "machine_serial": payload?["machine_serial"],
+      "amount": amount,
+      "product_serials": payload?["product_serials"],
+      "quantities": payload?["quantities"],
+    };
+  }
+
+  // Acts the same as the "pay with wallet" button on the discount page, or as
+  // the "کردم" (OK) button on the card swipe page in "increase wallet balance"
+  // mode: when the balance doesn't cover the price, the missing amount is
+  // deposited first and then the whole purchase is charged to the wallet —
+  // exactly like the card swipe deposit flow.
   Future<void> _payWithWallet() async {
     final payload = _readPayload();
-    if (payload == null || _user == -1) {
+    if (payload == null || _user == -1 || _finalPrice == null ||
+        _finalPrice! <= 0) {
       return;
     }
     setState(() {
       _isPaying = true;
     });
     try {
-      await ProductService.createUserWalletPurchase({
-        "creation_date": DateTime.now().toIso8601String(),
-        "discount_codes": _selectedDiscountCodes,
-        "user": _user,
-        "machine_serial": payload["machine_serial"],
-        "amount": _finalPrice,
-        "product_serials": payload["product_serials"],
-        "quantities": payload["quantities"],
-      });
+      final depositAmount = _finalPrice! - (_walletBalance ?? 0);
+      if (depositAmount > 0) {
+        // Top up the wallet with the missing amount first, same as the
+        // card swipe "افزایش اعتبار" mode.
+        await ProductService.depositToWallet({
+          "creation_date": DateTime.now().toIso8601String(),
+          "user": _user,
+          "bank_serial": "123456",
+          "amount": depositAmount,
+        });
+      }
+      await ProductService.createUserWalletPurchase(
+        _buildWalletPurchaseData(_finalPrice!),
+      );
       _finishPayment();
     } on DioException {
       if (mounted) {
@@ -530,117 +586,136 @@ class _OnlinePaymentPageState extends State<OnlinePaymentPage>
               itemCount: _allDiscounts.length,
               itemBuilder: (context, index) {
                 final discount = _allDiscounts[index];
-                final isSelected = discount.selected;
+                final isAvailable = _isDiscountAvailable(discount);
+                final isSelected = isAvailable && discount.selected;
 
                 return Directionality(
                   textDirection: .rtl,
-                  child: Card(
-                    elevation: isSelected ? 4 : 1,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12.0),
-                      side: BorderSide(
-                        color: isSelected
-                            ? Theme.of(context).colorScheme.primary
-                            : Colors.transparent,
-                        width: 2,
+                  // Unavailable (product-limited) discounts are dimmed and
+                  // greyed out so it is obvious they can't be picked.
+                  child: Opacity(
+                    opacity: isAvailable ? 1.0 : 0.55,
+                    child: Card(
+                      elevation: isSelected ? 4 : 1,
+                      color: isAvailable ? null : Colors.grey[200],
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12.0),
+                        side: BorderSide(
+                          color: isSelected
+                              ? Theme.of(context).colorScheme.primary
+                              : isAvailable
+                              ? Colors.transparent
+                              : Colors.grey.shade400,
+                          width: 2,
+                        ),
                       ),
-                    ),
-                    child: InkWell(
-                      onTap: () {
-                        setState(() {
-                          discount.selected = !discount.selected;
-                        });
-                        _updateFinalPrice();
-                      },
-                      child: Padding(
-                        padding: const EdgeInsets.all(12.0),
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          crossAxisAlignment: CrossAxisAlignment.center,
-                          children: [
-                            // Selection indicator
-                            Icon(
-                              isSelected
-                                  ? Icons.check_box
-                                  : Icons.check_box_outline_blank,
-                              size: 28,
-                              color: isSelected
-                                  ? Theme.of(context).colorScheme.primary
-                                  : Colors.grey.shade600,
-                            ),
-                            const SizedBox(height: 6),
-                            Text(
-                              discount.name,
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                fontWeight: FontWeight.bold,
+                      child: InkWell(
+                        onTap: isAvailable
+                            ? () {
+                                setState(() {
+                                  discount.selected = !discount.selected;
+                                });
+                                _updateFinalPrice();
+                              }
+                            : null,
+                        child: Padding(
+                          padding: const EdgeInsets.all(12.0),
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              // Selection indicator
+                              Icon(
+                                isSelected
+                                    ? Icons.check_box
+                                    : Icons.check_box_outline_blank,
+                                size: 28,
                                 color: isSelected
                                     ? Theme.of(context).colorScheme.primary
-                                    : Colors.black87,
+                                    : Colors.grey.shade600,
                               ),
-                            ),
-                            if (discount.pinned) ...[
-                              const SizedBox(height: 4),
+                              const SizedBox(height: 6),
+                              Text(
+                                discount.name,
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  color: isAvailable
+                                      ? isSelected
+                                          ? Theme.of(
+                                              context,
+                                            ).colorScheme.primary
+                                          : Colors.black87
+                                      : Colors.black54,
+                                ),
+                              ),
+                              if (discount.pinned) ...[
+                                const SizedBox(height: 4),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                    vertical: 2,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: Colors.orange,
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                  child: Text(
+                                    'ویژه دستگاه',
+                                    textDirection: .rtl,
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w500,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                              if (discount.description != null &&
+                                  discount.description!.isNotEmpty) ...[
+                                const SizedBox(height: 4),
+                                Flexible(
+                                  child: FittedBox(
+                                    fit: BoxFit.scaleDown,
+                                    child: Text(
+                                      discount.description!,
+                                      textAlign: TextAlign.center,
+                                      maxLines: 2,
+                                      textDirection: .rtl,
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        color: isAvailable
+                                            ? Colors.black54
+                                            : Colors.black38,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                              const SizedBox(height: 6),
                               Container(
                                 padding: const EdgeInsets.symmetric(
                                   horizontal: 8,
                                   vertical: 2,
                                 ),
                                 decoration: BoxDecoration(
-                                  color: Colors.orange,
+                                  color: Colors.grey[200],
                                   borderRadius: BorderRadius.circular(4),
                                 ),
                                 child: Text(
-                                  'ویژه دستگاه',
+                                  'کد: ${discount.code}',
                                   textDirection: .rtl,
                                   style: TextStyle(
                                     fontSize: 12,
                                     fontWeight: FontWeight.w500,
-                                    color: Colors.white,
+                                    color: isAvailable
+                                        ? Colors.black54
+                                        : Colors.black38,
                                   ),
                                 ),
                               ),
                             ],
-                            if (discount.description != null &&
-                                discount.description!.isNotEmpty) ...[
-                              const SizedBox(height: 4),
-                              Flexible(
-                                child: FittedBox(
-                                  fit: BoxFit.scaleDown,
-                                  child: Text(
-                                    discount.description!,
-                                    textAlign: TextAlign.center,
-                                    maxLines: 2,
-                                    textDirection: .rtl,
-                                    style: const TextStyle(
-                                      fontSize: 11,
-                                      color: Colors.black54,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ],
-                            const SizedBox(height: 6),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 8,
-                                vertical: 2,
-                              ),
-                              decoration: BoxDecoration(
-                                color: Colors.grey[200],
-                                borderRadius: BorderRadius.circular(4),
-                              ),
-                              child: Text(
-                                'کد: ${discount.code}',
-                                textDirection: .rtl,
-                                style: const TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w500,
-                                  color: Colors.black54,
-                                ),
-                              ),
-                            ),
-                          ],
+                          ),
                         ),
                       ),
                     ),
@@ -691,27 +766,21 @@ class _OnlinePaymentPageState extends State<OnlinePaymentPage>
                       )
                     : const Text('پرداخت آنلاین'),
               ),
-              // Pay with wallet: only when logged in and balance is known.
+              // Pay with wallet: only when logged in and the balance is
+              // above zero. A balance that is too low to cover the price
+              // turns this into the "افزایش اعتبار" (top up) action.
               if (_user != -1)
                 Column(
                   children: [
                     ElevatedButton(
                       onPressed:
-                          (_isPaying ||
-                              _walletBalance == null ||
-                              _finalPrice == null ||
-                              _walletBalance! <= 0)
-                          ? null
-                          : _payWithWallet,
+                          _isWalletButtonEnabled ? _payWithWallet : null,
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.teal,
                         foregroundColor: Colors.white,
                       ),
                       child: Text(
-                        _walletBalance != null &&
-                                _finalPrice != null &&
-                                _walletBalance! > 0 &&
-                                _walletBalance! < _finalPrice!
+                        _needsWalletTopUp
                             ? 'افزایش اعتبار'
                             : 'پرداخت با کیف پول',
                       ),
@@ -748,6 +817,12 @@ class _OnlineDiscount {
   final String name;
   final String? description;
   final bool pinned;
+
+  // When productLimit is set, the discount only applies to the listed
+  // products and is therefore unusable for any other order.
+  final bool productLimit;
+  final List<String> productSerials;
+
   bool selected;
 
   _OnlineDiscount({
@@ -755,6 +830,8 @@ class _OnlineDiscount {
     required this.name,
     required this.pinned,
     this.description,
+    this.productLimit = false,
+    this.productSerials = const <String>[],
     this.selected = false,
   });
 }
