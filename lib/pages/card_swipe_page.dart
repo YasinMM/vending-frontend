@@ -322,7 +322,9 @@ class _CardSwipePageState extends ConsumerState<CardSwipePage>
                   } else {
                     await createCardPurchaseTransaction();
                   }
-                  if (mounted) {
+                  // Guard the BuildContext that is actually used here (the
+                  // one captured by this closure), not the State's `mounted`.
+                  if (context.mounted) {
                     context.go("/transaction_success");
                   }
                 },

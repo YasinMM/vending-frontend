@@ -2,11 +2,14 @@ import 'dart:async';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_production_test/data/classes/discount_json.dart';
+import 'package:flutter_production_test/data/classes/machine_consumables.dart';
 import 'package:flutter_production_test/providers/active_discounts_notifier_provider.dart';
 import 'package:flutter_production_test/providers/active_machine_notifier_provider.dart';
 import 'package:flutter_production_test/providers/selected_products_notifier_provider.dart';
 import 'package:flutter_production_test/services/product_service.dart';
 import 'package:flutter_production_test/widgets/loading_widgets.dart';
+import 'package:flutter_production_test/widgets/machine_selector.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
@@ -68,6 +71,10 @@ class _ProductPageState extends ConsumerState<ProductPage> {
   // Loading indicators for network requests
   bool _isLoadingProducts = false;
   bool _isStartingPayment = false;
+
+  // Current consumable amounts of the active machine, used to disable the
+  // product options the machine can no longer dispense.
+  MachineConsumables _consumables = MachineConsumables.empty;
 
   // Cached final-price request for the summary page. Created once when the
   // user moves past the last step so it isn't re-fetched on every rebuild.
@@ -230,6 +237,12 @@ class _ProductPageState extends ConsumerState<ProductPage> {
         });
         // First option of the first step is selected by default
         _selectDefaultOption(0);
+      } else {
+        // No products for this machine: drop the steps built for the
+        // previous one so no stale options are shown.
+        setState(() {
+          _steps.clear();
+        });
       }
     } on DioException {
       return;
@@ -271,7 +284,10 @@ class _ProductPageState extends ConsumerState<ProductPage> {
               productSerials: List<String>.from(d["product_serials"]),
               isActive: d["is_active"],
               description: d["description"],
-              pinned: (machineSerials.contains(serial)) ? d["is_pinned"][machineSerials.indexOf(serial)] : false,
+              // Resolved defensively: the backend builds "machine_serials" and
+              // "is_pinned" with two independent queries, so indexing the
+              // second by the first one's position can go out of range.
+              pinned: readPinnedForMachine(d, serial),
             ),
           );
         }
@@ -302,6 +318,7 @@ class _ProductPageState extends ConsumerState<ProductPage> {
   @override
   void initState() {
     getMachineProducts(ref.read(activeMachineProvider));
+    loadMachineConsumables(ref.read(activeMachineProvider));
     // Listen for explicit clearing of the selected products (from the
     // transaction success page) and reset the order flow accordingly.
     ref.listenManual(selectedProductsProvider, (previous, next) {
@@ -312,12 +329,134 @@ class _ProductPageState extends ConsumerState<ProductPage> {
     super.initState();
   }
 
-  // Selects the first option of the given step by default (if nothing selected)
+  // Rebuilds the whole order flow for a newly selected machine: drops the
+  // cached price, the current selection and any half-finished order, then
+  // loads the new machine's products. Keeps the user on the first step.
+  void _onMachineChanged(String serial) {
+    // Also clears the provider, so no order from the previous machine can
+    // reach a transaction for the new one.
+    ref.read(selectedProductsProvider.notifier).setProducts([]);
+    _resetOrder();
+    getMachineProducts(serial);
+    loadMachineConsumables(serial);
+  }
+
+  // Reloads the consumable amounts for [serial]. The backend recalculates
+  // them from the consumable-change records, so this both refreshes the stock
+  // levels and re-enables options that became sellable again after a refill.
+  Future<void> loadMachineConsumables(String serial) async {
+    try {
+      final response = await ProductService.getMachineConsumableList(serial);
+      if (!mounted) {
+        return;
+      }
+      final data = response.data;
+      if (data is Map) {
+        setState(() {
+          _consumables = MachineConsumables.fromJson(
+            Map<String, dynamic>.from(data),
+          );
+          // A selection may have become unavailable while it was highlighted.
+          _dropUnavailableSelections();
+        });
+      }
+    } on DioException {
+      // Consumables are advisory: keep the options enabled if unavailable.
+    }
+  }
+
+  // Whether the option at [stepIndex] can still be dispensed.
+  //
+  // A *main* product (the drink in step 0, and the add-ons that are dispensed
+  // as a single unit) is only disabled when the machine holds less than the
+  // single serving amount. The "double" size in step 1 is a different check,
+  // because it consumes the drink's double amount.
+  bool _isOptionAvailable(int stepIndex, ChoiceOption option) {
+    // "no__" options mean "do not add this", which needs no consumables.
+    if (option.serial.indexOf('no__') == 0) {
+      return true;
+    }
+    if (stepIndex == 1) {
+      return _isSizeAvailable(option.serial);
+    }
+    return !_consumables.isBelowSingleAmount(option.serial);
+  }
+
+  // Whether the single/double size option is dispenseable. A double serving
+  // needs the drink's double amount, so it is checked separately from the
+  // single serving that the main product option uses.
+  bool _isSizeAvailable(String sizeSerial) {
+    final drink = _steps.isNotEmpty ? _steps[0].selectedOption : null;
+    if (drink == null) {
+      return true;
+    }
+    return _consumables.canDispense(drink, sizeSerial == 'double' ? 2 : 1);
+  }
+
+  /// Whether the currently highlighted option of [stepIndex] is selectable.
+  /// Used by the OK button so an undispensable highlight cannot be confirmed.
+  bool _isSelectionValid(int stepIndex) {
+    if (stepIndex < 0 || stepIndex >= _steps.length) {
+      return true;
+    }
+    final selected = _steps[stepIndex].selectedOption;
+    if (selected == null) {
+      return false;
+    }
+    return _isOptionAvailable(stepIndex, _findOption(_steps[stepIndex], selected));
+  }
+
+  /// Whether at least one option of [stepIndex] is selectable. When none are,
+  /// the user must not be able to continue past this step.
+  bool _hasAvailableOption(int stepIndex) {
+    if (stepIndex < 0 || stepIndex >= _steps.length) {
+      return true;
+    }
+    final step = _steps[stepIndex];
+    if (step.options.isEmpty) {
+      return false;
+    }
+    return step.options.any((o) => _isOptionAvailable(stepIndex, o));
+  }
+
+  // Clears any highlighted option that is no longer available, so the order
+  // can never be confirmed with an undispensable product.
+  void _dropUnavailableSelections() {
+    for (var i = 0; i < _steps.length; i++) {
+      final step = _steps[i];
+      final selected = step.selectedOption;
+      if (selected == null) {
+        continue;
+      }
+      if (!_isOptionAvailable(i, _findOption(step, selected))) {
+        step.selectedOption = null;
+        step.selectedOptionTitle = null;
+      }
+    }
+  }
+
+  ChoiceOption _findOption(ChoiceStep step, String serial) {
+    return step.options.firstWhere(
+      (o) => o.serial == serial,
+      orElse: () => ChoiceOption(
+        title: '',
+        icon: Icons.help_outline,
+        serial: serial,
+        priceDiff: 0,
+      ),
+    );
+  }
+
+  // Selects an option of the given step by default: the first one that is
+  // actually selectable, so the highlight never lands on a disabled option.
   void _selectDefaultOption(int stepIndex) {
     if (stepIndex >= 0 && stepIndex < _steps.length) {
       final step = _steps[stepIndex];
       if (step.selectedOption == null && step.options.isNotEmpty) {
-        final first = step.options.first;
+        final first = step.options.firstWhere(
+          (o) => _isOptionAvailable(stepIndex, o),
+          orElse: () => step.options.first,
+        );
         step.selectedOption = first.serial;
         step.selectedOptionTitle = first.title;
         // Keep single/double pricing in sync like a manual selection would
@@ -359,7 +498,14 @@ class _ProductPageState extends ConsumerState<ProductPage> {
     final currentIdx = step.options.indexWhere(
       (o) => o.serial == step.selectedOption,
     );
-    final nextIdx = (currentIdx + 1) % step.options.length;
+    var nextIdx = (currentIdx + 1) % step.options.length;
+    // Skip options the machine can no longer dispense, so the highlight never
+    // lands on a disabled option.
+    final availableIdx = _nextAvailableIndex(step, _currentIndex, nextIdx);
+    if (availableIdx == null) {
+      return;
+    }
+    nextIdx = availableIdx;
     final option = step.options[nextIdx];
     setState(() {
       step.selectedOption = option.serial;
@@ -370,10 +516,29 @@ class _ProductPageState extends ConsumerState<ProductPage> {
     });
   }
 
+  // Finds the next selectable option at or after [from], wrapping once around
+  // the step. Returns null when every option is unavailable.
+  int? _nextAvailableIndex(
+    ChoiceStep step,
+    int stepIndex,
+    int from,
+  ) {
+    for (var offset = 0; offset < step.options.length; offset++) {
+      final idx = (from + offset) % step.options.length;
+      if (_isOptionAvailable(stepIndex, step.options[idx])) {
+        return idx;
+      }
+    }
+    return null;
+  }
+
   // Confirms the current selection: advances to the next step,
   // or triggers the selected payment option on the summary page.
   void _confirmSelection() {
     if (_currentIndex < _steps.length) {
+      if (!_canLeaveCurrentStep()) {
+        return;
+      }
       _goToNextPage();
       return;
     }
@@ -395,6 +560,41 @@ class _ProductPageState extends ConsumerState<ProductPage> {
         context.push("/phone_payment");
         break;
     }
+  }
+
+  /// Guards advancing past the current step. Shows the reason and returns
+  /// false when the highlighted option is undispensable, or when no option of
+  /// this step is available at all.
+  bool _canLeaveCurrentStep() {
+    if (!_hasAvailableOption(_currentIndex)) {
+      _showNoStockMessage();
+      return false;
+    }
+    if (!_isSelectionValid(_currentIndex)) {
+      _showNoStockMessage();
+      return false;
+    }
+    return true;
+  }
+
+  void _showNoStockMessage() {
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    if (messenger == null) {
+      return;
+    }
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: const Text(
+            'موجودی دستگاه برای گزینه انتخاب شده کافی نیست.',
+            textDirection: .rtl,
+            textAlign: TextAlign.right,
+          ),
+          backgroundColor: Colors.red.shade700,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
   }
 
   Future<void> _startCardPayment() async {
@@ -497,6 +697,14 @@ class _ProductPageState extends ConsumerState<ProductPage> {
     String selectedValue,
     String selectedTitle,
   ) {
+    // Guard against selecting an option the machine can no longer dispense
+    // (the button is disabled, but the nav buttons can drive this too).
+    if (!_isOptionAvailable(
+      stepIndex,
+      _findOption(_steps[stepIndex], selectedValue),
+    )) {
+      return;
+    }
     setState(() {
       _steps[stepIndex].selectedOption = selectedValue;
       _steps[stepIndex].selectedOptionTitle = selectedTitle;
@@ -578,7 +786,7 @@ class _ProductPageState extends ConsumerState<ProductPage> {
     // PopScope ensures system back buttons (Android/Web) trigger our custom back logic
     return PopScope(
       canPop: _currentIndex == 0,
-      onPopInvoked: (didPop) {
+      onPopInvokedWithResult: (didPop, result) {
         if (!didPop) {
           _goToPreviousPage();
         }
@@ -599,6 +807,16 @@ class _ProductPageState extends ConsumerState<ProductPage> {
                     tooltip: 'بازگشت',
                   )
                 : null,
+            // Machine picker in the top-right corner. Switching it reloads
+            // the whole order flow for the newly selected machine.
+            actions: [
+              Padding(
+                padding: const EdgeInsets.only(left: 12, right: 8),
+                child: Center(
+                  child: MachineSelector(onChanged: _onMachineChanged),
+                ),
+              ),
+            ],
           ),
           body: PageView.builder(
             controller: _pageController,
@@ -696,6 +914,7 @@ class _ProductPageState extends ConsumerState<ProductPage> {
     final screenHeight = MediaQuery.of(context).size.height;
     final compact = screenHeight < 600;
     final buttonScale = compact ? 0.7 : 1.0;
+    final noOptionAvailable = !_hasAvailableOption(index);
 
     return Center(
       child: SingleChildScrollView(
@@ -711,6 +930,34 @@ class _ProductPageState extends ConsumerState<ProductPage> {
                 fontWeight: FontWeight.bold,
               ),
             ),
+            const SizedBox(height: 12),
+            // Blocking message: none of the options can be dispensed.
+            if (noOptionAvailable)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.red.shade50,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.red.shade300),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.error_outline, color: Colors.red.shade700),
+                    const SizedBox(width: 12),
+                    const Expanded(
+                      child: Text(
+                        'موجودی دستگاه برای هیچ‌کدام از گزینه‌ها کافی نیست.',
+                        textDirection: .rtl,
+                        style: TextStyle(
+                          color: Colors.red,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             SizedBox(height: compact ? 20 : 40),
 
             // ConstrainedBox handles ultra-wide screens (Tablets/Web)
@@ -729,11 +976,13 @@ class _ProductPageState extends ConsumerState<ProductPage> {
                 ),
                 itemCount: step.options.length,
                 itemBuilder: (context, optionIndex) {
+                  final option = step.options[optionIndex];
                   return _buildSquareButton(
                     stepIndex: index,
-                    option: step.options[optionIndex],
-                    priceDiff: step.options[optionIndex].priceDiff,
+                    option: option,
+                    priceDiff: option.priceDiff,
                     scale: buttonScale,
+                    isAvailable: _isOptionAvailable(index, option),
                   );
                 },
               ),
@@ -749,75 +998,101 @@ class _ProductPageState extends ConsumerState<ProductPage> {
     required ChoiceOption option,
     required int priceDiff,
     required double scale,
+    required bool isAvailable,
   }) {
     final step = _steps[stepIndex];
     final isSelected = step.selectedOption == option.serial;
     final colorScheme = Theme.of(context).colorScheme;
 
-    return Card(
-      elevation: isSelected ? 8 : 2,
-      color: isSelected ? colorScheme.primaryContainer : colorScheme.surface,
-      clipBehavior: Clip.antiAlias,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16.0),
-        side: BorderSide(
-          color: isSelected ? colorScheme.primary : Colors.transparent,
-          width: 2.5,
-        ),
-      ),
-      child: InkWell(
-        onTap: () => _handleSelection(stepIndex, option.serial, option.title),
-        child: Padding(
-          padding: EdgeInsets.symmetric(
-            horizontal: 12.0 * scale,
-            vertical: 8.0 * scale,
+    return Opacity(
+      // Options the machine can no longer dispense are dimmed out.
+      opacity: isAvailable ? 1.0 : 0.45,
+      child: Card(
+        elevation: isSelected ? 8 : 2,
+        color: isAvailable
+            ? (isSelected ? colorScheme.primaryContainer : colorScheme.surface)
+            : colorScheme.surfaceContainerHighest,
+        clipBehavior: Clip.antiAlias,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16.0),
+          side: BorderSide(
+            color: isSelected ? colorScheme.primary : Colors.transparent,
+            width: 2.5,
           ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(
-                option.icon,
-                size: 32 * scale,
-                color: isSelected ? colorScheme.primary : Colors.grey[700],
-              ),
-              SizedBox(width: 10 * scale),
-              Expanded(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    Text(
-                      option.title,
-                      textAlign: TextAlign.center,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 15 * scale,
-                        fontWeight: FontWeight.bold,
-                        color: isSelected
-                            ? colorScheme.primary
-                            : Colors.black87,
-                      ),
-                    ),
-                    SizedBox(height: 4 * scale),
-                    Text(
-                      priceDiff >= 0
-                          ? "${persianFormatter.format(priceDiff / 10)} تومان"
-                          : "${persianFormatter.format(-priceDiff / 10)} تومان سود",
-                      textAlign: TextAlign.center,
-                      textDirection: .rtl,
-                      style: TextStyle(
-                        fontSize: 12 * scale,
-                        fontWeight: FontWeight.bold,
-                        color: priceDiff >= 0
-                            ? Colors.black54
-                            : Colors.green[300],
-                      ),
-                    ),
-                  ],
+        ),
+        child: InkWell(
+          onTap: !isAvailable
+              ? null
+              : () =>
+                    _handleSelection(stepIndex, option.serial, option.title),
+          child: Padding(
+            padding: EdgeInsets.symmetric(
+              horizontal: 12.0 * scale,
+              vertical: 8.0 * scale,
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  option.icon,
+                  size: 32 * scale,
+                  color: isAvailable
+                      ? (isSelected ? colorScheme.primary : Colors.grey[700])
+                      : Colors.grey,
                 ),
-              ),
-            ],
+                SizedBox(width: 10 * scale),
+                Expanded(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      Text(
+                        option.title,
+                        textAlign: TextAlign.center,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 15 * scale,
+                          fontWeight: FontWeight.bold,
+                          color: isAvailable
+                              ? (isSelected
+                                    ? colorScheme.primary
+                                    : Colors.black87)
+                              : Colors.grey,
+                        ),
+                      ),
+                      SizedBox(height: 4 * scale),
+                      if (!isAvailable)
+                        Text(
+                          'موجودی دستگاه کافی نیست',
+                          textAlign: TextAlign.center,
+                          textDirection: .rtl,
+                          style: TextStyle(
+                            fontSize: 11 * scale,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.red[700],
+                          ),
+                        )
+                      else
+                        Text(
+                          priceDiff >= 0
+                              ? "${persianFormatter.format(priceDiff / 10)} تومان"
+                              : "${persianFormatter.format(-priceDiff / 10)} تومان سود",
+                          textAlign: TextAlign.center,
+                          textDirection: .rtl,
+                          style: TextStyle(
+                            fontSize: 12 * scale,
+                            fontWeight: FontWeight.bold,
+                            color: priceDiff >= 0
+                                ? Colors.black54
+                                : Colors.green[300],
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),

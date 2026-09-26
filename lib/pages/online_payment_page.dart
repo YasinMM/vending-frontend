@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_production_test/data/classes/discount_json.dart';
 import 'package:flutter_production_test/services/product_service.dart';
 import 'package:flutter_production_test/widgets/loading_widgets.dart';
 import 'package:go_router/go_router.dart';
@@ -155,18 +156,16 @@ class _OnlinePaymentPageState extends State<OnlinePaymentPage>
 
   // Maps one discount entry of the backend to the local model.
   _OnlineDiscount _toOnlineDiscount(Map<String, dynamic> d, String serial) {
-    final machineSerials = List<String>.from(d["machine_serials"]);
     return _OnlineDiscount(
       code: d["code"],
       name: d["name"],
       description: d["description"],
-      productLimit: d["product_limit"] == true,
-      productSerials: d["product_serials"] == null
-          ? <String>[]
-          : List<String>.from(d["product_serials"]),
-      pinned: (machineSerials.contains(serial))
-          ? d["is_pinned"][machineSerials.indexOf(serial)]
-          : false,
+      productLimit: readProductLimit(d),
+      productSerials: readProductSerials(d),
+      // Resolved defensively: the backend builds "machine_serials" and
+      // "is_pinned" with two independent queries, so indexing the second by
+      // the first one's position can go out of range.
+      pinned: readPinnedForMachine(d, serial),
     );
   }
 
@@ -823,7 +822,8 @@ class _OnlineDiscount {
   final bool productLimit;
   final List<String> productSerials;
 
-  bool selected;
+  // Toggled locally when the user picks/deselects the card.
+  bool selected = false;
 
   _OnlineDiscount({
     required this.code,
@@ -832,6 +832,5 @@ class _OnlineDiscount {
     this.description,
     this.productLimit = false,
     this.productSerials = const <String>[],
-    this.selected = false,
   });
 }

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_production_test/data/classes/discount_json.dart';
 import 'package:flutter_production_test/providers/active_discounts_notifier_provider.dart';
 import 'package:flutter_production_test/providers/active_machine_notifier_provider.dart';
 import 'package:flutter_production_test/providers/active_user_notifier_provider.dart';
@@ -71,7 +72,10 @@ class _NfcUsePageState extends ConsumerState<NfcUsePage>
               productSerials: List<String>.from(d["product_serials"]),
               isActive: d["is_active"],
               description: d["description"],
-              pinned: (machineSerials.contains(serial)) ? d["is_pinned"][machineSerials.indexOf(serial)] : false,
+              // Resolved defensively: the backend builds "machine_serials" and
+              // "is_pinned" with two independent queries, so indexing the
+              // second by the first one's position can go out of range.
+              pinned: readPinnedForMachine(d, serial),
             ),
           );
         }
@@ -186,7 +190,9 @@ class _NfcUsePageState extends ConsumerState<NfcUsePage>
                     : () async {
                   ref.read(activeUserProvider.notifier).setUser(1);
                   await setUserMachineDiscounts();
-                  if(mounted){
+                  // Guard the BuildContext used by this closure, not the
+                  // State's `mounted`.
+                  if (context.mounted) {
                     context.push("/discounts");
                   }
                 },
@@ -208,7 +214,9 @@ class _NfcUsePageState extends ConsumerState<NfcUsePage>
                     : () async {
                   ref.read(activeUserProvider.notifier).setUser(2);
                   await setUserMachineDiscounts();
-                  if(mounted){
+                  // Guard the BuildContext used by this closure, not the
+                  // State's `mounted`.
+                  if (context.mounted) {
                     context.push("/discounts");
                   }
                 },
@@ -230,7 +238,9 @@ class _NfcUsePageState extends ConsumerState<NfcUsePage>
                     : () async {
                   ref.read(activeUserProvider.notifier).setUser(3);
                   await setUserMachineDiscounts();
-                  if(mounted){
+                  // Guard the BuildContext used by this closure, not the
+                  // State's `mounted`.
+                  if (context.mounted) {
                     context.push("/discounts");
                   }
                 },

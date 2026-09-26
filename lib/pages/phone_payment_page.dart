@@ -75,7 +75,7 @@ class _PhonePaymentPageState extends ConsumerState<PhonePaymentPage>
     final encoded = base64Url.encode(utf8.encode(payload));
     final origin = Uri.base.origin;
     final path = Uri.base.path.replaceFirst(RegExp(r'index\.html$'), '');
-    return '$origin${path}#/online_payment?data=$encoded';
+    return '$origin$path#/online_payment?data=$encoded';
   }
 
   // Opens the online payment page in a new tab/window — the exact same

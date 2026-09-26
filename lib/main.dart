@@ -8,13 +8,19 @@ import 'package:flutter_production_test/pages/nfc_use_page.dart';
 import 'package:flutter_production_test/pages/online_payment_page.dart';
 import 'package:flutter_production_test/pages/phone_payment_page.dart';
 import 'package:flutter_production_test/pages/product_page.dart';
+import 'package:flutter_production_test/pages/screensaver_page.dart';
 import 'package:flutter_production_test/services/critical_error_watch_service.dart';
 import 'package:flutter_production_test/services/inactivity_service.dart';
+import 'package:flutter_production_test/services/machine_preference_service.dart';
 import 'package:flutter_production_test/widgets/error_simulation_button.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-void main() {
+Future<void> main() async {
+  // Hydrate the persisted machine selection before the first frame so the
+  // active machine provider can be read synchronously by any page.
+  WidgetsFlutterBinding.ensureInitialized();
+  await MachinePreferenceService.load();
   runApp(ProviderScope(child: MainApp()));
 }
 
@@ -70,6 +76,10 @@ final _router = GoRouter(
       path: ErrorSimulationButton.routePath,
       builder: (context, state) => const ErrorSimulationPage(),
     ),
+    GoRoute(
+      path: ScreensaverPage.routePath,
+      builder: (context, state) => const ScreensaverPage(),
+    ),
   ],
 );
 
@@ -96,8 +106,9 @@ class _MainAppState extends ConsumerState<MainApp> {
   @override
   void initState() {
     super.initState();
-    // Configure the global inactivity timer (1 minute after the last
-    // interaction the app resets to its default state).
+    // Configure the global inactivity timer (a few minutes after the last
+    // interaction the app resets to its default state and shows the
+    // screensaver, except on the exempt routes).
     InactivityService.instance.configure(ref, _router);
     InactivityService.instance.reset();
     // Watch for critical error logs created for this machine (e.g. simulated

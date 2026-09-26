@@ -120,7 +120,7 @@ class CriticalErrorWatchService {
               content: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text(error.userMessage),
+                  Text(error.userMessage, style: TextStyle(fontWeight: FontWeight.bold)),
                   const SizedBox(height: 12),
                   Text(
                     'کد خطا: ${error.errorCode}',
@@ -128,11 +128,6 @@ class CriticalErrorWatchService {
                       fontWeight: FontWeight.bold,
                       color: Colors.red,
                     ),
-                  ),
-                  const SizedBox(height: 20),
-                  const Text(
-                    'لطفاً با صاحب دستگاه تماس بگیرید.',
-                    style: TextStyle(fontWeight: FontWeight.bold),
                   ),
                 ],
               ),

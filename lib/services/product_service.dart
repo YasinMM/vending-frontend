@@ -51,6 +51,14 @@ class ProductService {
     return DioClient.dio.get('/getsensorlist$query');
   }
 
+  /// Current consumable amounts of a machine (recalculated server-side from
+  /// the consumable change records) plus the amount each product consumes.
+  static Future<Response> getMachineConsumableList(String machineSerial) {
+    return DioClient.dio.get(
+      '/getmachineconsumablelist/$machineSerial',
+    );
+  }
+
   static Future<Response> createErrorLog(Map<String, dynamic> data) {
     return DioClient.dio.post('/createerrorlog', data: data);
   }
