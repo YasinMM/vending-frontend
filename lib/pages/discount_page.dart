@@ -2,6 +2,9 @@ import 'dart:async';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_production_test/data/classes/card_payment_payload.dart';
+import 'package:flutter_production_test/data/classes/utc_time.dart';
+import 'package:flutter_production_test/pages/order_loading_page.dart';
 import 'package:flutter_production_test/providers/active_discounts_notifier_provider.dart';
 import 'package:flutter_production_test/providers/active_machine_notifier_provider.dart';
 import 'package:flutter_production_test/providers/active_user_notifier_provider.dart';
@@ -184,7 +187,7 @@ class _DiscountPageState extends ConsumerState<DiscountPage> {
 
     if (user == -1) {
       await ProductService.createCardPurchaseTransaction({
-        "creation_date": DateTime.now().toIso8601String(),
+        "creation_date": utcNowIso(),
         "discount_codes": selectedDiscountCodes,
         "bank_serial": "234556",
         "machine_serial": machineSerial,
@@ -194,7 +197,7 @@ class _DiscountPageState extends ConsumerState<DiscountPage> {
       });
     } else {
       await ProductService.createUserCardPurchaseTransaction({
-        "creation_date": DateTime.now().toIso8601String(),
+        "creation_date": utcNowIso(),
         "discount_codes": selectedDiscountCodes,
         "user": user,
         "bank_serial": "234556",
@@ -377,36 +380,52 @@ class _DiscountPageState extends ConsumerState<DiscountPage> {
       return;
     }
 
-    // Mark the selected discounts before navigating
+    // Sync the discounts' `selected` flags with the current selection before
+    // navigating. The downstream pages (card swipe, wallet purchase) read
+    // `activeDiscountsProvider.where((d) => d.selected)`, so this flag must
+    // mirror `_selectedDiscountCodes` exactly. Setting only the newly
+    // selected ones (and never clearing the others) used to leave stale flags
+    // behind, so a discount deselected here was still applied to the amount
+    // shown on the card swipe page.
     final selectedProducts = ref.read(selectedProductsProvider);
     final selectedProductSerials = selectedProducts
         .map((p) => p.serial)
         .toSet();
-    final selectedDiscounts = orderedDiscounts
-        .where(
-          (d) =>
-              _selectedDiscountCodes.contains(d.code) &&
-              _isDiscountAvailable(d, selectedProductSerials),
-        )
-        .toList();
-    for (final discount in selectedDiscounts) {
-      discount.selected = true;
+    for (final discount in orderedDiscounts) {
+      discount.selected =
+          _selectedDiscountCodes.contains(discount.code) &&
+          _isDiscountAvailable(discount, selectedProductSerials);
     }
 
     if (_finalPrice == 0) {
       // تکمیل سفارش
       await createCardPurchaseTransaction();
       if (mounted) {
-        context.go("/transaction_success");
+        context.go(OrderLoadingPage.routePath);
       }
       return;
     }
 
-    final walletVisible = ref.read(activeUserProvider) != -1;
+    final productSerials = selectedProducts.map((p) => p.serial).toList();
+    final quantities = selectedProducts.map((p) => p.quantity).toList();
+    final selectedDiscountCodes = _selectedDiscountCodes.toList();
+    final user = ref.read(activeUserProvider);
+    final machineSerial = ref.read(activeMachineProvider);
+
+    final walletVisible = user != -1;
     if (index == 0) {
-      // پرداخت با کارت
+      // پرداخت با کارت: hand the order to the waiting page, which opens the
+      // card swipe page in a new tab.
+      final payload = CardPaymentPayload.purchase(
+        user: user,
+        machineSerial: machineSerial,
+        discountCodes: selectedDiscountCodes,
+        amount: _finalPrice ?? 0,
+        productSerials: productSerials,
+        quantities: quantities,
+      );
       if (mounted) {
-        context.push("/card_swipe");
+        context.go(OrderLoadingPage.routePath, extra: {'payload': payload});
       }
     } else if (walletVisible && _walletBalance != null && _finalPrice != null) {
       // کیف پول / افزایش اعتبار
@@ -427,13 +446,26 @@ class _DiscountPageState extends ConsumerState<DiscountPage> {
           }
         }
         if (mounted) {
-          context.go("/transaction_success");
+          context.go(OrderLoadingPage.routePath);
         }
-      } else if (mounted) {
-        context.push("/card_swipe", extra: {
-          "depositAmount": depositAmount,
-          "purchaseAmount": _finalPrice!,
-        });
+      } else {
+        // Not enough balance: top it up with the card in a new tab, then pay
+        // for the order from the wallet.
+        final payload = CardPaymentPayload.walletTopUp(
+          user: user,
+          machineSerial: machineSerial,
+          discountCodes: selectedDiscountCodes,
+          depositAmount: depositAmount,
+          purchaseAmount: _finalPrice!,
+          productSerials: productSerials,
+          quantities: quantities,
+        );
+        if (mounted) {
+          context.go(
+            OrderLoadingPage.routePath,
+            extra: {'payload': payload},
+          );
+        }
       }
     }
   }
@@ -448,7 +480,7 @@ class _DiscountPageState extends ConsumerState<DiscountPage> {
         .toList();
 
     await ProductService.createUserWalletPurchase({
-      "creation_date": DateTime.now().toIso8601String(),
+      "creation_date": utcNowIso(),
       "discount_codes": selectedDiscountCodes,
       "user": ref.read(activeUserProvider),
       "machine_serial": ref.read(activeMachineProvider),

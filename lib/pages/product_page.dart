@@ -4,6 +4,8 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_production_test/data/classes/discount_json.dart';
 import 'package:flutter_production_test/data/classes/machine_consumables.dart';
+import 'package:flutter_production_test/data/classes/online_payment_url_builder.dart';
+import 'package:flutter_production_test/pages/order_loading_page.dart';
 import 'package:flutter_production_test/providers/active_discounts_notifier_provider.dart';
 import 'package:flutter_production_test/providers/active_machine_notifier_provider.dart';
 import 'package:flutter_production_test/providers/selected_products_notifier_provider.dart';
@@ -556,10 +558,19 @@ class _ProductPageState extends ConsumerState<ProductPage> {
         // Not implemented yet
         break;
       case 'phone':
-        finalizeOrder();
-        context.push("/phone_payment");
+        _startPhonePayment();
         break;
     }
+  }
+
+  // Phone payment: finalize the order and go straight to the waiting page,
+  // which shows the QR code and polls for the finalized transaction.
+  void _startPhonePayment() {
+    finalizeOrder();
+    context.go(
+      OrderLoadingPage.routePath,
+      extra: {'mode': 'qr', 'url': OnlinePaymentUrlBuilder.build(ref)},
+    );
   }
 
   /// Guards advancing past the current step. Shows the reason and returns
@@ -1225,8 +1236,7 @@ class _ProductPageState extends ConsumerState<ProductPage> {
                     label: 'پرداخت با تلفن همراه',
                     color: Colors.blueAccent,
                     onPressed: () {
-                      finalizeOrder();
-                      context.push("/phone_payment");
+                      _startPhonePayment();
                     },
                   ),
                   _buildPaymentButton(

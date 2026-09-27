@@ -1,14 +1,8 @@
-import 'dart:convert';
-import 'dart:html' as html;
-
 import 'package:flutter/material.dart';
-import 'package:flutter_production_test/providers/active_discounts_notifier_provider.dart';
-import 'package:flutter_production_test/providers/active_machine_notifier_provider.dart';
-import 'package:flutter_production_test/providers/active_user_notifier_provider.dart';
-import 'package:flutter_production_test/providers/selected_products_notifier_provider.dart';
+import 'package:flutter_production_test/data/classes/online_payment_url_builder.dart';
+import 'package:flutter_production_test/pages/order_loading_page.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:qr_flutter/qr_flutter.dart';
 
 class PhonePaymentPage extends ConsumerStatefulWidget {
   const PhonePaymentPage({super.key});
@@ -47,41 +41,13 @@ class _PhonePaymentPageState extends ConsumerState<PhonePaymentPage>
     super.dispose();
   }
 
-  // Builds the same payload the card payment flow uses, so the online
-  // payment tab can create the transaction with fresh app state.
-  Map<String, dynamic> _buildOnlinePaymentPayload() {
-    final selectedProducts = ref.read(selectedProductsProvider);
-    final selectedDiscountCodes = ref
-        .read(activeDiscountsProvider)
-        .where((d) => d.selected)
-        .map((d) => d.code)
-        .toList();
-
-    return {
-      "creation_date": DateTime.now().toIso8601String(),
-      "discount_codes": selectedDiscountCodes,
-      "user": ref.read(activeUserProvider),
-      "bank_serial": "234556",
-      "machine_serial": ref.read(activeMachineProvider),
-      "product_serials": selectedProducts.map((p) => p.serial).toList(),
-      "quantities": selectedProducts.map((p) => p.quantity).toList(),
-    };
-  }
-
-  // Builds the online payment URL with the order data encoded in the
-  // query string (base64 JSON), so the page works in any browser.
-  String _buildOnlinePaymentUrl() {
-    final payload = jsonEncode(_buildOnlinePaymentPayload());
-    final encoded = base64Url.encode(utf8.encode(payload));
-    final origin = Uri.base.origin;
-    final path = Uri.base.path.replaceFirst(RegExp(r'index\.html$'), '');
-    return '$origin$path#/online_payment?data=$encoded';
-  }
-
-  // Opens the online payment page in a new tab/window — the exact same
-  // URL the QR code contains.
-  void _openOnlinePaymentTab() {
-    html.window.open(_buildOnlinePaymentUrl(), 'online_payment');
+  // Hands the order over to the loading page, which renders the QR code and
+  // keeps polling until the payment appears on the backend.
+  void _startWaiting() {
+    context.go(
+      OrderLoadingPage.routePath,
+      extra: {'mode': 'qr', 'url': OnlinePaymentUrlBuilder.build(ref)},
+    );
   }
 
   // Back action (left button): goes back to the products page.
@@ -102,8 +68,6 @@ class _PhonePaymentPageState extends ConsumerState<PhonePaymentPage>
 
   @override
   Widget build(BuildContext context) {
-    final paymentUrl = _buildOnlinePaymentUrl();
-
     return Scaffold(
       appBar: AppBar(
         title: const Text('پرداخت با تلفن همراه'),
@@ -135,39 +99,32 @@ class _PhonePaymentPageState extends ConsumerState<PhonePaymentPage>
 
               // Instruction text
               Text(
-                "لطفا بارکد پرداخت خود را اسکن کنید.",
+                "پرداخت خود را از طریق تلفن همراه انجام دهید.",
                 textAlign: TextAlign.center,
                 textDirection: TextDirection.rtl,
                 style: Theme.of(context).textTheme.headlineSmall?.copyWith(
                       fontWeight: FontWeight.bold,
                     ),
               ),
+              const SizedBox(height: 12),
+              const Text(
+                "پس از انتخاب گزینه زیر، بارکد پرداخت نمایش داده می شود.",
+                textAlign: TextAlign.center,
+                textDirection: TextDirection.rtl,
+                style: TextStyle(fontSize: 14, color: Colors.grey),
+              ),
               const SizedBox(height: 24),
 
-              // QR code containing the online payment URL with the
-              // complete order data in its query string.
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: QrImageView(
-                  data: paymentUrl,
-                  size: 220,
-                  backgroundColor: Colors.white,
-                ),
-              ),
               const SizedBox(height: 24),
 
               SizedBox(
                 child: ElevatedButton(
-                  onPressed: _openOnlinePaymentTab,
+                  onPressed: _startWaiting,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Theme.of(context).colorScheme.primary,
                     foregroundColor: Colors.white,
                   ),
-                  child: const Text('انجام شد'),
+                  child: const Text('پرداخت با تلفن همراه'),
                 ),
               ),
               const SizedBox(height: 12),

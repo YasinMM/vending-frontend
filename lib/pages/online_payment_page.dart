@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_production_test/data/classes/discount_json.dart';
+import 'package:flutter_production_test/data/classes/utc_time.dart';
 import 'package:flutter_production_test/services/product_service.dart';
 import 'package:flutter_production_test/widgets/loading_widgets.dart';
 import 'package:go_router/go_router.dart';
@@ -362,7 +363,7 @@ class _OnlinePaymentPageState extends State<OnlinePaymentPage>
   Map<String, dynamic> _buildWalletPurchaseData(int amount) {
     final payload = _readPayload();
     return {
-      "creation_date": DateTime.now().toIso8601String(),
+      "creation_date": utcNowIso(),
       "discount_codes": _selectedDiscountCodes,
       "user": _user,
       "machine_serial": payload?["machine_serial"],
@@ -392,7 +393,7 @@ class _OnlinePaymentPageState extends State<OnlinePaymentPage>
         // Top up the wallet with the missing amount first, same as the
         // card swipe "افزایش اعتبار" mode.
         await ProductService.depositToWallet({
-          "creation_date": DateTime.now().toIso8601String(),
+          "creation_date": utcNowIso(),
           "user": _user,
           "bank_serial": "123456",
           "amount": depositAmount,

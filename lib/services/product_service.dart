@@ -59,6 +59,19 @@ class ProductService {
     );
   }
 
+  /// Latest batch of machine receipts for [machineSerial] that were created at
+  /// or after [sinceIso]. A batch is the set of receipts sharing one serial,
+  /// i.e. one finalized order.
+  static Future<Response> getLatestReceiptBatch(
+    String machineSerial, {
+    required String sinceIso,
+  }) {
+    final query = Uri.encodeComponent(sinceIso);
+    return DioClient.dio.get(
+      '/getlatestreceiptbatch/$machineSerial?since=$query',
+    );
+  }
+
   static Future<Response> createErrorLog(Map<String, dynamic> data) {
     return DioClient.dio.post('/createerrorlog', data: data);
   }

@@ -1,6 +1,10 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_production_test/data/classes/card_payment_payload.dart';
+import 'package:flutter_production_test/data/classes/receipt_batch.dart';
 import 'package:flutter_production_test/pages/card_swipe_page.dart';
+import 'package:flutter_production_test/pages/order_loading_page.dart';
+import 'package:flutter_production_test/pages/order_preparation_page.dart';
 import 'package:flutter_production_test/pages/transaction_success_page.dart';
 import 'package:flutter_production_test/pages/discount_page.dart';
 import 'package:flutter_production_test/pages/error_simulation_page.dart';
@@ -71,6 +75,39 @@ final _router = GoRouter(
     GoRoute(
       path: '/transaction_success',
       builder: (context, state) => const TransactionSuccessPage(),
+    ),
+    GoRoute(
+      path: OrderLoadingPage.routePath,
+      builder: (context, state) {
+        final extra = state.extra;
+        if (extra is Map && extra['mode'] == 'qr') {
+          return OrderLoadingPage(
+            mode: OrderLoadingMode.showQrCode,
+            paymentUrl: extra['url'] as String?,
+          );
+        }
+        if (extra is Map && extra['payload'] is CardPaymentPayload) {
+          final payload = extra['payload'] as CardPaymentPayload;
+          return OrderLoadingPage(
+            mode: payload.isWalletTopUp
+                ? OrderLoadingMode.awaitWalletTopUp
+                : OrderLoadingMode.awaitPurchase,
+            cardPayload: payload,
+          );
+        }
+        return const OrderLoadingPage();
+      },
+    ),
+    GoRoute(
+      path: OrderPreparationPage.routePath,
+      builder: (context, state) {
+        final batch = state.extra;
+        if (batch is! ReceiptBatch) {
+          // No order data: fall back to a standalone page.
+          return const OrderPreparationPage(batch: ReceiptBatch.empty);
+        }
+        return OrderPreparationPage(batch: batch);
+      },
     ),
     GoRoute(
       path: ErrorSimulationButton.routePath,

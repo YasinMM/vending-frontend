@@ -2,17 +2,25 @@ import 'dart:async';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_production_test/providers/active_discounts_notifier_provider.dart';
-import 'package:flutter_production_test/providers/active_machine_notifier_provider.dart';
-import 'package:flutter_production_test/providers/active_user_notifier_provider.dart';
-import 'package:flutter_production_test/providers/selected_products_notifier_provider.dart';
+import 'package:flutter_production_test/data/classes/card_payment_payload.dart';
 import 'package:flutter_production_test/services/product_service.dart';
 import 'package:flutter_production_test/widgets/loading_widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
+/// Card reader page. Runs in its own browser tab, opened by the waiting page
+/// once the order is finalized.
+///
+/// The order travels in the URL (see [CardPaymentPayload]), because this tab
+/// is a separate app instance without the main tab's Riverpod state. The
+/// confirm button only creates the corresponding records; the waiting page in
+/// the main tab picks them up and moves on.
 class CardSwipePage extends ConsumerStatefulWidget {
+  /// Route of the card reader page. The waiting page builds this route with
+  /// the order encoded in the query string to open it in a new tab.
+  static const String routePath = '/card_swipe';
+
   final int? depositAmount;
   final int? purchaseAmount;
 
@@ -40,10 +48,24 @@ class _CardSwipePageState extends ConsumerState<CardSwipePage>
   bool _isCreatingTransaction = false;
   bool _isDepositing = false;
 
+  // True once the records have been created. The page then stays put and only
+  // reports success; the waiting page in the main tab takes over.
+  bool _isDone = false;
+
   // Whether the confirm button is busy with any payment request
   bool get _isConfirmingPayment => _isCreatingTransaction || _isDepositing;
 
-  bool get _isDepositMode => widget.isDepositMode;
+  /// The order this tab has to pay for, taken from the URL. Null when the
+  /// page was opened without order data (e.g. by hand).
+  CardPaymentPayload? _payload;
+
+  bool get _isDepositMode => _payload?.isWalletTopUp ?? widget.isDepositMode;
+
+  /// The amount shown to the customer: the top-up amount in deposit mode,
+  /// otherwise the purchase amount.
+  int? get _displayAmount => _isDepositMode
+      ? (_payload?.depositAmount ?? widget.depositAmount)
+      : (_payload?.purchaseAmount ?? _payload?.amount);
 
   Future<int> calculateFinalRawPrice(Map<String, dynamic> data) async {
     try {
@@ -59,56 +81,89 @@ class _CardSwipePageState extends ConsumerState<CardSwipePage>
   }
 
   Map<String, dynamic> _buildPriceRequestData() {
-    final selectedProducts = ref.read(selectedProductsProvider);
-    final selectedDiscountCodes = ref
-        .read(activeDiscountsProvider)
-        .where((d) => d.selected)
-        .map((d) => d.code)
-        .toList();
-
+    final payload = _payload;
+    if (payload != null) {
+      return {
+        "discount_codes": payload.discountCodes,
+        "machine_serial": payload.machineSerial,
+        "product_serials": payload.productSerials,
+        "quantities": payload.quantities,
+      };
+    }
+    // Fallback for the in-app navigation without a payload.
     return {
-      "discount_codes": selectedDiscountCodes,
-      "machine_serial": ref.read(activeMachineProvider),
-      "product_serials": selectedProducts.map((p) => p.serial).toList(),
-      "quantities": selectedProducts.map((p) => p.quantity).toList(),
+      "discount_codes": const <String>[],
+      "machine_serial": "",
+      "product_serials": const <String>[],
+      "quantities": const <int>[],
     };
   }
 
-  Map<String, dynamic> _buildWalletPurchaseData() {
-    final selectedProducts = ref.read(selectedProductsProvider);
-    final selectedDiscountCodes = ref
-        .read(activeDiscountsProvider)
-        .where((d) => d.selected)
-        .map((d) => d.code)
-        .toList();
-
+  // Body of the purchase created by a wallet top-up.
+  Map<String, dynamic> _buildWalletPurchaseData(CardPaymentPayload payload) {
     return {
-      "creation_date": DateTime.now().toIso8601String(),
-      "discount_codes": selectedDiscountCodes,
-      "user": ref.read(activeUserProvider),
-      "machine_serial": ref.read(activeMachineProvider),
-      "amount": widget.purchaseAmount,
-      "product_serials": selectedProducts.map((p) => p.serial).toList(),
-      "quantities": selectedProducts.map((p) => p.quantity).toList(),
+      "creation_date": payload.creationDate,
+      "discount_codes": payload.discountCodes,
+      "user": payload.user,
+      "machine_serial": payload.machineSerial,
+      "amount": payload.purchaseAmount,
+      "product_serials": payload.productSerials,
+      "quantities": payload.quantities,
     };
   }
 
-  Future<void> createWalletDeposit() async {
+  // Creates a wallet top-up and the purchase it pays for.
+  Future<void> createWalletDeposit(CardPaymentPayload payload) async {
     setState(() {
       _isDepositing = true;
     });
     try {
       await ProductService.depositToWallet({
-        "creation_date": DateTime.now().toIso8601String(),
-        "user": ref.read(activeUserProvider),
-        "bank_serial": "123456",
-        "amount": widget.depositAmount,
+        "creation_date": payload.creationDate,
+        "user": payload.user,
+        "bank_serial": payload.bankSerial,
+        "amount": payload.depositAmount,
       });
-      await ProductService.createUserWalletPurchase(_buildWalletPurchaseData());
+      await ProductService.createUserWalletPurchase(
+        _buildWalletPurchaseData(payload),
+      );
     } finally {
       if (mounted) {
         setState(() {
           _isDepositing = false;
+        });
+      }
+    }
+  }
+
+  // Creates the card purchase for the order.
+  Future<void> createCardPurchaseTransaction(CardPaymentPayload payload) async {
+    setState(() {
+      _isCreatingTransaction = true;
+    });
+    try {
+      final body = <String, dynamic>{
+        "creation_date": payload.creationDate,
+        "discount_codes": payload.discountCodes,
+        "bank_serial": payload.bankSerial,
+        "machine_serial": payload.machineSerial,
+        "amount": payload.amount,
+        "product_serials": payload.productSerials,
+        "quantities": payload.quantities,
+      };
+
+      if (payload.user == -1) {
+        await ProductService.createCardPurchaseTransaction(body);
+      } else {
+        await ProductService.createUserCardPurchaseTransaction({
+          ...body,
+          "user": payload.user,
+        });
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isCreatingTransaction = false;
         });
       }
     }
@@ -129,70 +184,13 @@ class _CardSwipePageState extends ConsumerState<CardSwipePage>
     });
   }
 
-  Future<bool> createCardPurchaseTransaction() async {
-    setState(() {
-      _isCreatingTransaction = true;
-    });
-    try {
-      int user = ref.read(activeUserProvider);
-      String machineSerial = ref.read(activeMachineProvider);
-
-    List<String> productSerials = [];
-    List<int> quantities = [];
-
-    final selectedProducts = ref.read(selectedProductsProvider);
-
-    for (Product product in selectedProducts) {
-      productSerials.add(product.serial);
-      quantities.add(product.quantity);
-    }
-
-    final selectedDiscountCodes = ref
-        .watch(activeDiscountsProvider)
-        .where((d) => d.selected)
-        .map((d) => d.code)
-        .toList();
-
-    final calculatedAmount = await calculateFinalRawPrice(
-      _buildPriceRequestData(),
-    );
-
-    if (user == -1) {
-      await ProductService.createCardPurchaseTransaction({
-        "creation_date": DateTime.now().toIso8601String(),
-        "discount_codes": selectedDiscountCodes,
-        "bank_serial": "234556",
-        "machine_serial": machineSerial,
-        "amount": calculatedAmount,
-        "product_serials": productSerials,
-        "quantities": quantities,
-      });
-    } else {
-      await ProductService.createUserCardPurchaseTransaction({
-        "creation_date": DateTime.now().toIso8601String(),
-        "discount_codes": selectedDiscountCodes,
-        "user": user,
-        "bank_serial": "234556",
-        "machine_serial": machineSerial,
-        "amount": calculatedAmount,
-        "product_serials": productSerials,
-        "quantities": quantities,
-      });
-    }
-
-    return true;
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isCreatingTransaction = false;
-        });
-      }
-    }
-  }
-
   @override
   void initState() {
     super.initState();
+
+    // The order comes from the URL: this page runs in its own tab, which has
+    // no access to the main tab's Riverpod state.
+    _payload = CardPaymentPayload.fromUrl();
 
     // Set up the animation controller for a 1.5-second loop
     _controller = AnimationController(
@@ -205,8 +203,12 @@ class _CardSwipePageState extends ConsumerState<CardSwipePage>
       begin: 1.0,
       end: 1.15,
     ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeInOut));
+
     if (_isDepositMode) {
-      _calculatedAmount = widget.depositAmount;
+      _calculatedAmount = _displayAmount;
+    } else if (_payload != null && _payload!.amount != null) {
+      // The amount was already calculated by the waiting page.
+      _calculatedAmount = _payload!.amount;
     } else {
       _loadCalculatedAmount();
     }
@@ -221,18 +223,28 @@ class _CardSwipePageState extends ConsumerState<CardSwipePage>
   // Back action (left button): cancels the transaction (same as the
   // previous OK long-press behavior).
   void _goBack() {
-    if (mounted) {
-      context.pop();
+    if (_isDone) {
+      return;
     }
+    _cancelTransaction();
   }
 
   void _onOkPressUp() {
+    if (_isDone) {
+      return;
+    }
     _cancelTransaction();
   }
 
   // OK tap acts like the "لغو تراکنش" button on this page
   void _cancelTransaction() {
-    context.pop();
+    // This page can be opened as a standalone tab, where there is nothing to
+    // pop back to; fall back to the products page in that case.
+    if (context.canPop()) {
+      context.pop();
+    } else {
+      context.go("/");
+    }
   }
 
   @override
@@ -314,18 +326,25 @@ class _CardSwipePageState extends ConsumerState<CardSwipePage>
                   backgroundColor: Theme.of(context).colorScheme.primary,
                   foregroundColor: Colors.white,
                 ),
-                onPressed: _isConfirmingPayment
+                onPressed: _isConfirmingPayment || _isDone || _payload == null
                     ? null
                     : () async {
-                  if (_isDepositMode) {
-                    await createWalletDeposit();
-                  } else {
-                    await createCardPurchaseTransaction();
+                  final payload = _payload;
+                  if (payload == null) {
+                    return;
                   }
-                  // Guard the BuildContext that is actually used here (the
-                  // one captured by this closure), not the State's `mounted`.
-                  if (context.mounted) {
-                    context.go("/transaction_success");
+                  if (_isDepositMode) {
+                    await createWalletDeposit(payload);
+                  } else {
+                    await createCardPurchaseTransaction(payload);
+                  }
+                  // Only the records are created here. The waiting page in
+                  // the main tab polls for them and moves on, so this tab
+                  // must not navigate anywhere.
+                  if (mounted) {
+                    setState(() {
+                      _isDone = true;
+                    });
                   }
                 },
                 child: _isConfirmingPayment
@@ -337,12 +356,12 @@ class _CardSwipePageState extends ConsumerState<CardSwipePage>
                           color: Colors.white,
                         ),
                       )
-                    : const Text("کردم"),
+                    : Text(_isDone ? "ثبت شد" : "کردم"),
               ),
               const SizedBox(height: 12),
               SizedBox(
                 child: ElevatedButton(
-                  onPressed: () => context.pop(),
+                  onPressed: _isDone ? null : _cancelTransaction,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.red,
                     foregroundColor: Colors.white,
@@ -354,7 +373,7 @@ class _CardSwipePageState extends ConsumerState<CardSwipePage>
           ),
         ),
       ),
-      bottomNavigationBar: _buildBottomNavBar(),
+      bottomNavigationBar: _isDone ? null : _buildBottomNavBar(),
       ),
     );
   }
