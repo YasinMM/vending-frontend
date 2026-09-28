@@ -227,7 +227,10 @@ class _OrderLoadingPageState extends ConsumerState<OrderLoadingPage>
   }
 
   void _goToPreparation(ReceiptBatch batch) {
-    context.go(
+    // `push` rather than `go`: a `go` to the same location is a no-op, so a
+    // second order would keep the first order's already-built page (and its
+    // stale batch). Pushing always builds a new page with the new order.
+    context.push(
       OrderPreparationPage.routePath,
       extra: batch,
     );
@@ -394,7 +397,7 @@ class _OrderLoadingPageState extends ConsumerState<OrderLoadingPage>
     return Column(
       children: [
         Text(
-          'زمان باقی مانده: ${persianFormatter.format(minutes)}:${seconds.toString().padLeft(2, '0')}',
+          'زمان باقی مانده: ${persianFormatter.format(minutes)}:${persianFormatter.format(seconds).padLeft(2, '٠')}',
           textDirection: .rtl,
           style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
         ),

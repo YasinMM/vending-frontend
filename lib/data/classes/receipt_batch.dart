@@ -78,6 +78,10 @@ class ReceiptBatchItem {
   final int companyShare;
   final int type;
 
+  /// 1 = main drink, 2 = add-on (cream, cup, ...). Lets the UI list the main
+  /// coffee first and the add-ons underneath it.
+  final int productType;
+
   const ReceiptBatchItem({
     required this.productSerial,
     required this.productName,
@@ -86,7 +90,11 @@ class ReceiptBatchItem {
     required this.discountAmount,
     required this.companyShare,
     required this.type,
+    this.productType = 1,
   });
+
+  /// Whether this line is the main drink rather than an add-on.
+  bool get isMainProduct => productType == 1;
 
   factory ReceiptBatchItem.fromJson(Map<String, dynamic> json) {
     int asInt(Object? value) {
@@ -104,6 +112,11 @@ class ReceiptBatchItem {
       discountAmount: asInt(json['discount_amount']),
       companyShare: asInt(json['company_share']),
       type: asInt(json['type']),
+      // Falls back to the main product when the server omits the type, so an
+      // older backend cannot cause the drink to be treated as an add-on.
+      productType: json['product_type'] == null
+          ? 1
+          : asInt(json['product_type']),
     );
   }
 }

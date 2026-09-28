@@ -123,11 +123,13 @@ final _router = GoRouter(
 class DioClient {
   DioClient._();
 
+  // No global contentType: setting it here would attach the header to GET
+  // requests as well, which needlessly turns every simple read into a CORS
+  // "non-simple" request. The JSON content type is set per request instead,
+  // only where a body is actually sent.
   static final Dio dio = Dio(
     BaseOptions(
       baseUrl: "https://vending-backend-slfs.onrender.com",
-      contentType: "application/json",
-      
     ),
   ); 
 }

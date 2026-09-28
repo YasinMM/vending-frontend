@@ -2,6 +2,10 @@ import 'package:dio/dio.dart';
 import 'package:flutter_production_test/main.dart';
 
 class ProductService {
+  // JSON content type, set per request rather than globally so that GET calls
+  // stay CORS "simple" and do not need a preflight round trip.
+  static const _json = 'application/json';
+
   static Future<Response> getMachineProductList(String machineSerial) {
     return DioClient.dio.get('/getmachineproductslist/$machineSerial');
   }
@@ -15,19 +19,23 @@ class ProductService {
   }
 
   static Future<Response> getFinalPriceFromList(Map<String, dynamic> data) {
-    return DioClient.dio.post('/getfinalpricefromlist', data: data);
+    return DioClient.dio.post('/getfinalpricefromlist', data: data,
+        options: Options(contentType: _json));
   }
 
   static Future<Response> createCardPurchaseTransaction(Map<String, dynamic> data) {
-    return DioClient.dio.post('/createcardpurchasetransaction', data: data);
+    return DioClient.dio.post('/createcardpurchasetransaction', data: data,
+        options: Options(contentType: _json));
   }
 
   static Future<Response> createUserCardPurchaseTransaction(Map<String, dynamic> data) {
-    return DioClient.dio.post('/createusercardpurchasetransaction', data: data);
+    return DioClient.dio.post('/createusercardpurchasetransaction', data: data,
+        options: Options(contentType: _json));
   }
 
   static Future<Response> createUserWalletPurchase(Map<String, dynamic> data) {
-    return DioClient.dio.post('/createuserwalletpurchase', data: data);
+    return DioClient.dio.post('/createuserwalletpurchase', data: data,
+        options: Options(contentType: _json));
   }
 
   static Future<Response> getWalletByUser(int user) {
@@ -35,7 +43,8 @@ class ProductService {
   }
 
   static Future<Response> depositToWallet(Map<String, dynamic> data) {
-    return DioClient.dio.post('/deposittowallet', data: data);
+    return DioClient.dio.post('/deposittowallet', data: data,
+        options: Options(contentType: _json));
   }
 
   static Future<Response> getErrorDictionaryList() {
@@ -73,7 +82,13 @@ class ProductService {
   }
 
   static Future<Response> createErrorLog(Map<String, dynamic> data) {
-    return DioClient.dio.post('/createerrorlog', data: data);
+    return DioClient.dio.post('/createerrorlog', data: data,
+        options: Options(contentType: _json));
+  }
+
+  static Future<Response> createSensorData(Map<String, dynamic> data) {
+    return DioClient.dio.post('/createsensordata', data: data,
+        options: Options(contentType: _json));
   }
 
   static Future<Response> getCriticalErrorLogs(String machineSerial, {String? sinceIso}) {
