@@ -105,7 +105,7 @@ class _OrderLoadingPageState extends ConsumerState<OrderLoadingPage>
     // order (the card swipe tab may have confirmed very quickly), so the
     // search starts a little earlier rather than at this exact instant.
     _searchedSince =
-        DateTime.now().toUtc().subtract(const Duration(seconds: 30));
+        DateTime.now().toUtc().subtract(const Duration(seconds: 15));
 
     _controller = AnimationController(
       vsync: this,

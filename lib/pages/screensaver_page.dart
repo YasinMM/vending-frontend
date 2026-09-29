@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_production_test/providers/active_discounts_notifier_provider.dart';
 import 'package:flutter_production_test/providers/active_user_notifier_provider.dart';
 import 'package:flutter_production_test/providers/selected_products_notifier_provider.dart';
+import 'package:flutter_production_test/widgets/corner_notification.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -51,6 +52,10 @@ class _ScreensaverPageState extends ConsumerState<ScreensaverPage>
   // Leaves the screensaver: clears the in-progress order and returns to the
   // first step of the product page.
   void _resume() {
+    CornerNotification.show(
+      context,
+      message: 'فرستادن trigger برای بویلر',
+    );
     ref.read(activeUserProvider.notifier).setUser(-1);
     ref.read(selectedProductsProvider.notifier).setProducts([]);
     ref.read(activeDiscountsProvider.notifier).setDiscounts([]);
@@ -86,8 +91,7 @@ class _ScreensaverPageState extends ConsumerState<ScreensaverPage>
               textAlign: TextAlign.center,
               textDirection: .rtl,
               style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-            ),
-          ],
+            ),          ],
         ),
       ),
       bottomNavigationBar: _buildBottomNavBar(),
