@@ -405,7 +405,10 @@ class _ProductPageState extends ConsumerState<ProductPage> {
     if (selected == null) {
       return false;
     }
-    return _isOptionAvailable(stepIndex, _findOption(_steps[stepIndex], selected));
+    return _isOptionAvailable(
+      stepIndex,
+      _findOption(_steps[stepIndex], selected),
+    );
   }
 
   /// Whether at least one option of [stepIndex] is selectable. When none are,
@@ -474,8 +477,7 @@ class _ProductPageState extends ConsumerState<ProductPage> {
       if (option.serial == selectedValue) {
         _steps[1].options[0].priceDiff = option.priceDiff;
         _steps[1].options[1].priceDiff =
-            (option.product!.companyShare *
-                        option.product!.companyDoubleRate +
+            (option.product!.companyShare * option.product!.companyDoubleRate +
                     option.product!.parnterShare *
                         option.product!.partnerDoubleRate)
                 .floor();
@@ -520,11 +522,7 @@ class _ProductPageState extends ConsumerState<ProductPage> {
 
   // Finds the next selectable option at or after [from], wrapping once around
   // the step. Returns null when every option is unavailable.
-  int? _nextAvailableIndex(
-    ChoiceStep step,
-    int stepIndex,
-    int from,
-  ) {
+  int? _nextAvailableIndex(ChoiceStep step, int stepIndex, int from) {
     for (var offset = 0; offset < step.options.length; offset++) {
       final idx = (from + offset) % step.options.length;
       if (_isOptionAvailable(stepIndex, step.options[idx])) {
@@ -881,7 +879,10 @@ class _ProductPageState extends ConsumerState<ProductPage> {
             // Left button: back / reset to the first step
             IconButton.filledTonal(
               onPressed: _goBack,
-              icon: const Icon(Icons.subdirectory_arrow_left, color: Colors.red),
+              icon: const Icon(
+                Icons.subdirectory_arrow_left,
+                color: Colors.red,
+              ),
               tooltip: 'بازگشت',
               visualDensity: visualDensity,
             ),
@@ -974,26 +975,42 @@ class _ProductPageState extends ConsumerState<ProductPage> {
             // ConstrainedBox handles ultra-wide screens (Tablets/Web)
             ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 1200),
-              // All options are laid out in a single row
-              child: GridView.builder(
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: step.options.length.clamp(1, 100),
-                  crossAxisSpacing: 16,
-                  mainAxisSpacing: 16,
-                  // Wider aspect ratio so the row stays minimal in height
-                  childAspectRatio: compact ? 2.2 : 1.6,
-                ),
-                itemCount: step.options.length,
-                itemBuilder: (context, optionIndex) {
-                  final option = step.options[optionIndex];
-                  return _buildSquareButton(
-                    stepIndex: index,
-                    option: option,
-                    priceDiff: option.priceDiff,
-                    scale: buttonScale,
-                    isAvailable: _isOptionAvailable(index, option),
+              // Keep option cards the same responsive height as the first
+              // step, even when later steps have fewer options in their row.
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  const spacing = 16.0;
+                  final firstStepCount = (_steps.first.options.length).clamp(
+                    1,
+                    100,
+                  );
+                  final firstStepItemWidth =
+                      (constraints.maxWidth - spacing * (firstStepCount - 1)) /
+                      firstStepCount;
+                  final firstStepAspectRatio = compact ? 2.2 : 1.6;
+                  final optionHeight =
+                      firstStepItemWidth / firstStepAspectRatio;
+
+                  return GridView.builder(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: step.options.length.clamp(1, 100),
+                      crossAxisSpacing: spacing,
+                      mainAxisSpacing: spacing,
+                      mainAxisExtent: optionHeight,
+                    ),
+                    itemCount: step.options.length,
+                    itemBuilder: (context, optionIndex) {
+                      final option = step.options[optionIndex];
+                      return _buildSquareButton(
+                        stepIndex: index,
+                        option: option,
+                        priceDiff: option.priceDiff,
+                        scale: buttonScale,
+                        isAvailable: _isOptionAvailable(index, option),
+                      );
+                    },
                   );
                 },
               ),
@@ -1034,8 +1051,7 @@ class _ProductPageState extends ConsumerState<ProductPage> {
         child: InkWell(
           onTap: !isAvailable
               ? null
-              : () =>
-                    _handleSelection(stepIndex, option.serial, option.title),
+              : () => _handleSelection(stepIndex, option.serial, option.title),
           child: Padding(
             padding: EdgeInsets.symmetric(
               horizontal: 12.0 * scale,
