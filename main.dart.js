@@ -29917,7 +29917,7 @@ $S:2}
 A.aAZ.prototype={
 $1(a){var s=A.df().b
 s=s==null?null:s.canvasKitBaseUrl
-return(s==null?"https://www.gstatic.com/flutter-canvaskit/af7e796e161ae0bb1ff0758c71a7105418bd9ded/":s)+a},
+return(s==null?"https://www.gstatic.com/flutter-canvaskit/692136cb6582dbfc5af3fb33c2515a069f2f66d0/":s)+a},
 $S:38}
 A.LI.prototype={
 a0b(){var s=this.GN(),r=$.bk.bC().ImageFilter.MakeColorFilter(s,null)
@@ -90505,7 +90505,7 @@ break}m.N(new A.arU(m))
 p=4
 j=t.N
 i=t.z
-h=A.ag(["sensor",m.r.i(0,"id"),"amount",d],j,i)
+h=A.ag(["machine_sensor",m.r.i(0,"id"),"amount",d],j,i)
 s=7
 return A.J($.eR().tu("/createsensordata",h,A.vW("application/json"),i),$async$zJ)
 case 7:l=b
