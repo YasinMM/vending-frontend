@@ -119,7 +119,7 @@ class _ErrorSimulationPageState extends State<ErrorSimulationPage> {
     });
     try {
       final response = await ProductService.createSensorData({
-        'sensor': _selectedSensor!['id'],
+        'machine_sensor': _selectedSensor!['id'],
         'amount': amount,
       });
       final data = Map<String, dynamic>.from(response.data);
