@@ -119,13 +119,13 @@ class _ProductPageState extends ConsumerState<ProductPage> {
               question: 'مقدار نوشیدنی را انتخاب کنید',
               options: [
                 ChoiceOption(
-                  title: 'تکی',
+                  title: 'تک',
                   icon: Icons.looks_one,
                   serial: "single",
                   priceDiff: 0,
                 ),
                 ChoiceOption(
-                  title: 'دوتایی',
+                  title: 'دوبل',
                   icon: Icons.looks_two,
                   serial: "double",
                   priceDiff: 0,
