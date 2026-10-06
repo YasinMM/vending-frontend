@@ -54,6 +54,9 @@ class OrderLoadingPage extends ConsumerStatefulWidget {
   /// Payment URL rendered as a QR code in [OrderLoadingMode.showQrCode].
   final String? paymentUrl;
 
+  /// Backend QR record used to link the phone purchase to its receipt.
+  final int? qrSerial;
+
   /// Order to hand over to the card swipe page opened in a new tab. Set for
   /// the card reader and wallet top-up modes.
   final CardPaymentPayload? cardPayload;
@@ -62,6 +65,7 @@ class OrderLoadingPage extends ConsumerStatefulWidget {
     super.key,
     this.mode = OrderLoadingMode.awaitPurchase,
     this.paymentUrl,
+    this.qrSerial,
     this.cardPayload,
   });
 
@@ -96,6 +100,7 @@ class _OrderLoadingPageState extends ConsumerState<OrderLoadingPage>
 
   /// Why the last poll returned nothing (from the backend `reason` field).
   String? _lastReason;
+  bool _isCanceling = false;
 
   @override
   void initState() {
@@ -124,8 +129,22 @@ class _OrderLoadingPageState extends ConsumerState<OrderLoadingPage>
   @override
   void dispose() {
     _stopTimers();
+    if (widget.mode == OrderLoadingMode.showQrCode && widget.qrSerial != null) {
+      // Idempotent server-side: only pending codes are canceled. This covers
+      // browser-back navigation in addition to the visible cancel controls.
+      unawaited(_cancelQrCodeOnDispose(widget.qrSerial!));
+    }
     _controller.dispose();
     super.dispose();
+  }
+
+  Future<void> _cancelQrCodeOnDispose(int serial) async {
+    try {
+      await ProductService.cancelMachineQRCode(serial);
+    } catch (_) {
+      // The page is already leaving; server-side timeout/payment checks remain
+      // the fallback if this best-effort cancellation cannot reach the API.
+    }
   }
 
   void _startCountdown() {
@@ -199,6 +218,17 @@ class _OrderLoadingPageState extends ConsumerState<OrderLoadingPage>
         _goToPreparation(batch);
         return;
       }
+      final qrIsPending = await _checkQrStatus();
+      if (!mounted) {
+        return;
+      }
+      if (qrIsPending == false) {
+        _stopTimers();
+        setState(() {
+          _lastReason = 'qr_code_expired';
+        });
+        return;
+      }
       // No batch yet. Report the backend's reason so an empty result is
       // distinguishable from a broken filter.
       final reason = response.data is Map
@@ -242,8 +272,7 @@ class _OrderLoadingPageState extends ConsumerState<OrderLoadingPage>
     }
     // The order was never confirmed by the machine: send the user back to the
     // start of the flow, where the same providers drive the reset.
-    ref.read(selectedProductsProvider.notifier).setProducts([]);
-    context.go("/");
+    _cancelQrRecordAndLeave();
   }
 
   // Cancels the transaction: stops the timers and drops the order, so the
@@ -251,11 +280,57 @@ class _OrderLoadingPageState extends ConsumerState<OrderLoadingPage>
   // phone payment pages.
   void _cancelTransaction() {
     _stopTimers();
+    _cancelQrRecordAndLeave();
+  }
+
+  Future<void> _cancelQrRecordAndLeave() async {
+    if (_isCanceling) {
+      return;
+    }
+    _isCanceling = true;
+    final qrSerial = widget.qrSerial;
+    if (widget.mode == OrderLoadingMode.showQrCode && qrSerial != null) {
+      try {
+        await ProductService.cancelMachineQRCode(qrSerial);
+      } on DioException {
+        // Server-side expiry/payment validation remains authoritative.
+      }
+    }
+    if (!mounted) {
+      return;
+    }
     ref.read(selectedProductsProvider.notifier).setProducts([]);
     ref.read(activeUserProvider.notifier).setUser(-1);
-    if (mounted) {
-      context.go("/");
+    context.go("/");
+  }
+
+  Future<bool?> _checkQrStatus() async {
+    final qrSerial = widget.qrSerial;
+    if (widget.mode != OrderLoadingMode.showQrCode || qrSerial == null) {
+      return true;
     }
+    try {
+      final response = await ProductService.getMachineQRCode(qrSerial);
+      final state = response.data is Map
+          ? int.tryParse(response.data['state'].toString())
+          : null;
+      if (state == 1) {
+        return true;
+      }
+      if (state == 3 || state == null) {
+        return false;
+      }
+      // Finished means payment succeeded; keep waiting for its receipt batch.
+      return null;
+    } on DioException {
+      // A transient status failure must not falsely expire a valid QR.
+      return null;
+    }
+  }
+
+  Future<void> _expireQrAndLeave() async {
+    _stopTimers();
+    await _cancelQrRecordAndLeave();
   }
 
   void _onOkPressUp() {
@@ -286,6 +361,20 @@ class _OrderLoadingPageState extends ConsumerState<OrderLoadingPage>
                   'خطا در دریافت اطلاعات رسید ($_consecutiveErrors تلاش ناموفق)',
                   textDirection: .rtl,
                   style: TextStyle(color: Colors.red.shade700),
+                )
+              else if (_lastReason == 'qr_code_expired')
+                Column(
+                  children: [
+                    const Text(
+                      'بارکد پرداخت منقضی شده است. لطفاً دوباره تلاش کنید.',
+                      textDirection: .rtl,
+                      style: TextStyle(color: Colors.red),
+                    ),
+                    TextButton(
+                      onPressed: _expireQrAndLeave,
+                      child: const Text('بازگشت'),
+                    ),
+                  ],
                 )
               else if (_lastReason != null)
                 Text(

@@ -17,7 +17,10 @@ class OnlinePaymentUrlBuilder {
 
   /// Payload of the current order, matching what the online payment page
   /// expects when it creates the transaction.
-  static Map<String, dynamic> buildPayload(WidgetRef ref) {
+  static Map<String, dynamic> buildPayload(
+    WidgetRef ref, {
+    required int qrSerial,
+  }) {
     final selectedProducts = ref.read(selectedProductsProvider);
     final selectedDiscountCodes = ref
         .read(activeDiscountsProvider)
@@ -33,12 +36,13 @@ class OnlinePaymentUrlBuilder {
       "machine_serial": ref.read(activeMachineProvider),
       "product_serials": selectedProducts.map((p) => p.serial).toList(),
       "quantities": selectedProducts.map((p) => p.quantity).toList(),
+      "machine_qr_code_serial": qrSerial,
     };
   }
 
   /// Absolute URL of the online payment page, carrying [ref]'s current order.
-  static String build(WidgetRef ref) {
-    final payload = jsonEncode(buildPayload(ref));
+  static String build(WidgetRef ref, {required int qrSerial}) {
+    final payload = jsonEncode(buildPayload(ref, qrSerial: qrSerial));
     final encoded = base64Url.encode(utf8.encode(payload));
     final origin = Uri.base.origin;
     final path = Uri.base.path.replaceFirst(RegExp(r'index\.html$'), '');

@@ -6,6 +6,22 @@ class ProductService {
   // stay CORS "simple" and do not need a preflight round trip.
   static const _json = 'application/json';
 
+  static Future<Response> createMachineQRCode(Map<String, dynamic> data) {
+    return DioClient.dio.post(
+      '/machineqrcode',
+      data: data,
+      options: Options(contentType: _json),
+    );
+  }
+
+  static Future<Response> getMachineQRCode(int serial) {
+    return DioClient.dio.get('/machineqrcode/$serial');
+  }
+
+  static Future<Response> cancelMachineQRCode(int serial) {
+    return DioClient.dio.post('/machineqrcode/$serial/cancel');
+  }
+
   static Future<Response> getMachineProductList(String machineSerial) {
     return DioClient.dio.get('/getmachineproductslist/$machineSerial');
   }

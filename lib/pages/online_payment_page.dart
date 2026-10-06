@@ -41,6 +41,8 @@ class _OnlinePaymentPageState extends State<OnlinePaymentPage>
 
   // Currently logged-in user (-1 = guest)
   int _user = -1;
+  int? _qrSerial;
+  bool _isQrExpired = false;
 
   // Animated icon on the login page (like the NFC use page)
   AnimationController? _controller;
@@ -78,7 +80,9 @@ class _OnlinePaymentPageState extends State<OnlinePaymentPage>
     }
     try {
       final decoded = utf8.decode(base64Url.decode(query));
-      return Map<String, dynamic>.from(jsonDecode(decoded) as Map);
+      final payload = Map<String, dynamic>.from(jsonDecode(decoded) as Map);
+      _qrSerial = int.tryParse(payload['machine_qr_code_serial']?.toString() ?? '');
+      return payload;
     } catch (_) {
       return null;
     }
@@ -89,6 +93,32 @@ class _OnlinePaymentPageState extends State<OnlinePaymentPage>
     if (mounted) {
       context.go("/transaction_success");
     }
+  }
+
+  Future<bool> _ensureQrPending() async {
+    final serial = _qrSerial;
+    if (serial == null) {
+      return true; // Preserve non-QR entry points to this page.
+    }
+    try {
+      final response = await ProductService.getMachineQRCode(serial);
+      final state = response.data is Map
+          ? int.tryParse(response.data['state'].toString())
+          : null;
+      if (state == 1) {
+        return true;
+      }
+    } on DioException {
+      // Treat missing or unreadable status as expired; never charge against
+      // an unknown QR state.
+    }
+    if (mounted) {
+      setState(() {
+        _isQrExpired = true;
+        _isPaying = false;
+      });
+    }
+    return false;
   }
 
   // Fetches the discounts of the selected user merged with the pinned
@@ -332,6 +362,9 @@ class _OnlinePaymentPageState extends State<OnlinePaymentPage>
       _isPaying = true;
     });
     try {
+      if (!await _ensureQrPending()) {
+        return;
+      }
       final priceResponse = await ProductService.getFinalPriceFromList({
         "discount_codes": payload["discount_codes"],
         "machine_serial": payload["machine_serial"],
@@ -349,10 +382,11 @@ class _OnlinePaymentPageState extends State<OnlinePaymentPage>
         await ProductService.createUserCardPurchaseTransaction(payload);
       }
       _finishPayment();
-    } on DioException {
+    } on DioException catch (e) {
       if (mounted) {
         setState(() {
           _isPaying = false;
+          _isQrExpired = e.response?.statusCode == 410;
         });
       }
     }
@@ -370,6 +404,7 @@ class _OnlinePaymentPageState extends State<OnlinePaymentPage>
       "amount": amount,
       "product_serials": payload?["product_serials"],
       "quantities": payload?["quantities"],
+      if (_qrSerial != null) "machine_qr_code_serial": _qrSerial,
     };
   }
 
@@ -388,6 +423,9 @@ class _OnlinePaymentPageState extends State<OnlinePaymentPage>
       _isPaying = true;
     });
     try {
+      if (!await _ensureQrPending()) {
+        return;
+      }
       final depositAmount = _finalPrice! - (_walletBalance ?? 0);
       if (depositAmount > 0) {
         // Top up the wallet with the missing amount first, same as the
@@ -399,14 +437,18 @@ class _OnlinePaymentPageState extends State<OnlinePaymentPage>
           "amount": depositAmount,
         });
       }
+      if (!await _ensureQrPending()) {
+        return;
+      }
       await ProductService.createUserWalletPurchase(
         _buildWalletPurchaseData(_finalPrice!),
       );
       _finishPayment();
-    } on DioException {
+    } on DioException catch (e) {
       if (mounted) {
         setState(() {
           _isPaying = false;
+          _isQrExpired = e.response?.statusCode == 410;
         });
       }
     }
@@ -423,11 +465,34 @@ class _OnlinePaymentPageState extends State<OnlinePaymentPage>
           centerTitle: true,
         ),
         body: Center(
-          child: _showDiscountSelection
-              ? _buildDiscountSelection()
-              : _buildLoginPage(),
+          child: _isQrExpired
+              ? _buildExpiredQrMessage()
+              : _showDiscountSelection
+                  ? _buildDiscountSelection()
+                  : _buildLoginPage(),
         ),
+      ),
+    );
+  }
 
+  Widget _buildExpiredQrMessage() {
+    return Padding(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Text(
+            'بارکد پرداخت منقضی شده است. لطفاً دوباره تلاش کنید.',
+            textDirection: .rtl,
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Colors.red, fontSize: 20),
+          ),
+          const SizedBox(height: 24),
+          ElevatedButton(
+            onPressed: () => context.go('/'),
+            child: const Text('بازگشت'),
+          ),
+        ],
       ),
     );
   }

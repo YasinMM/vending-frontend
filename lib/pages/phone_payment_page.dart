@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_production_test/data/classes/online_payment_url_builder.dart';
 import 'package:flutter_production_test/pages/order_loading_page.dart';
+import 'package:flutter_production_test/providers/active_machine_notifier_provider.dart';
+import 'package:flutter_production_test/services/product_service.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -15,6 +17,7 @@ class _PhonePaymentPageState extends ConsumerState<PhonePaymentPage>
     with SingleTickerProviderStateMixin {
   late final AnimationController _controller;
   late final Animation<double> _scaleAnimation;
+  bool _isCreatingQr = false;
 
   @override
   void initState() {
@@ -43,10 +46,51 @@ class _PhonePaymentPageState extends ConsumerState<PhonePaymentPage>
 
   // Hands the order over to the loading page, which renders the QR code and
   // keeps polling until the payment appears on the backend.
-  void _startWaiting() {
-    context.go(
-      OrderLoadingPage.routePath,
-      extra: {'mode': 'qr', 'url': OnlinePaymentUrlBuilder.build(ref)},
+  Future<void> _startWaiting() async {
+    if (_isCreatingQr) {
+      return;
+    }
+    setState(() {
+      _isCreatingQr = true;
+    });
+    try {
+      final response = await ProductService.createMachineQRCode({
+        'machine_serial': ref.read(activeMachineProvider),
+        'creation_date': DateTime.now().toUtc().toIso8601String(),
+      });
+      final data = response.data;
+      final qrSerial = data is Map ? int.tryParse(data['serial'].toString()) : null;
+      if (!mounted) {
+        return;
+      }
+      if (qrSerial == null) {
+        _showQrError();
+        return;
+      }
+      context.go(
+        OrderLoadingPage.routePath,
+        extra: {
+          'mode': 'qr',
+          'qrSerial': qrSerial,
+          'url': OnlinePaymentUrlBuilder.build(ref, qrSerial: qrSerial),
+        },
+      );
+    } catch (_) {
+      if (mounted) {
+        _showQrError();
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isCreatingQr = false;
+        });
+      }
+    }
+  }
+
+  void _showQrError() {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('ساخت بارکد پرداخت ناموفق بود. دوباره تلاش کنید.')),
     );
   }
 
@@ -119,12 +163,14 @@ class _PhonePaymentPageState extends ConsumerState<PhonePaymentPage>
 
               SizedBox(
                 child: ElevatedButton(
-                  onPressed: _startWaiting,
+                  onPressed: _isCreatingQr ? null : _startWaiting,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Theme.of(context).colorScheme.primary,
                     foregroundColor: Colors.white,
                   ),
-                  child: const Text('پرداخت با تلفن همراه'),
+                    child: _isCreatingQr
+                      ? const CircularProgressIndicator()
+                      : const Text('پرداخت با تلفن همراه'),
                 ),
               ),
               const SizedBox(height: 12),

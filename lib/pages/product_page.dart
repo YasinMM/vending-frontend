@@ -561,13 +561,53 @@ class _ProductPageState extends ConsumerState<ProductPage> {
     }
   }
 
-  // Phone payment: finalize the order and go straight to the waiting page,
-  // which shows the QR code and polls for the finalized transaction.
-  void _startPhonePayment() {
+  // Phone payment creates its backend QR record before presenting the QR.
+  Future<void> _startPhonePayment() async {
+    if (_isStartingPayment) {
+      return;
+    }
+    setState(() {
+      _isStartingPayment = true;
+    });
     finalizeOrder();
-    context.go(
-      OrderLoadingPage.routePath,
-      extra: {'mode': 'qr', 'url': OnlinePaymentUrlBuilder.build(ref)},
+    try {
+      final response = await ProductService.createMachineQRCode({
+        'machine_serial': ref.read(activeMachineProvider),
+        'creation_date': DateTime.now().toUtc().toIso8601String(),
+      });
+      if (!mounted) {
+        return;
+      }
+      final data = response.data;
+      final qrSerial = data is Map ? int.tryParse(data['serial'].toString()) : null;
+      if (qrSerial == null) {
+        _showQrStartError();
+        return;
+      }
+      context.go(
+        OrderLoadingPage.routePath,
+        extra: {
+          'mode': 'qr',
+          'qrSerial': qrSerial,
+          'url': OnlinePaymentUrlBuilder.build(ref, qrSerial: qrSerial),
+        },
+      );
+    } on DioException {
+      if (mounted) {
+        _showQrStartError();
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isStartingPayment = false;
+        });
+      }
+    }
+  }
+
+  void _showQrStartError() {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('ساخت بارکد پرداخت ناموفق بود. دوباره تلاش کنید.')),
     );
   }
 
@@ -1251,6 +1291,7 @@ class _ProductPageState extends ConsumerState<ProductPage> {
                     index: 2,
                     label: 'پرداخت با تلفن همراه',
                     color: Colors.blueAccent,
+                    isLoading: _isStartingPayment,
                     onPressed: () {
                       _startPhonePayment();
                     },

@@ -84,6 +84,7 @@ final _router = GoRouter(
           return OrderLoadingPage(
             mode: OrderLoadingMode.showQrCode,
             paymentUrl: extra['url'] as String?,
+            qrSerial: (extra['qrSerial'] as num?)?.toInt(),
           );
         }
         if (extra is Map && extra['payload'] is CardPaymentPayload) {
