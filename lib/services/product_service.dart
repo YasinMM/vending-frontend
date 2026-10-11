@@ -30,28 +30,49 @@ class ProductService {
     return DioClient.dio.get('/getmachinepinneddiscountlist/$machineSerial');
   }
 
-  static Future<Response> getUserMachineDiscountList(String machineSerial, int user) {
-    return DioClient.dio.get('/getusermachinediscountlist/$machineSerial/user/$user');
+  static Future<Response> getUserMachineDiscountList(
+    String machineSerial,
+    int user,
+  ) {
+    return DioClient.dio.get(
+      '/getusermachinediscountlist/$machineSerial/user/$user',
+    );
   }
 
   static Future<Response> getFinalPriceFromList(Map<String, dynamic> data) {
-    return DioClient.dio.post('/getfinalpricefromlist', data: data,
-        options: Options(contentType: _json));
+    return DioClient.dio.post(
+      '/getfinalpricefromlist',
+      data: data,
+      options: Options(contentType: _json),
+    );
   }
 
-  static Future<Response> createCardPurchaseTransaction(Map<String, dynamic> data) {
-    return DioClient.dio.post('/createcardpurchasetransaction', data: data,
-        options: Options(contentType: _json));
+  static Future<Response> createCardPurchaseTransaction(
+    Map<String, dynamic> data,
+  ) {
+    return DioClient.dio.post(
+      '/createcardpurchasetransaction',
+      data: data,
+      options: Options(contentType: _json),
+    );
   }
 
-  static Future<Response> createUserCardPurchaseTransaction(Map<String, dynamic> data) {
-    return DioClient.dio.post('/createusercardpurchasetransaction', data: data,
-        options: Options(contentType: _json));
+  static Future<Response> createUserCardPurchaseTransaction(
+    Map<String, dynamic> data,
+  ) {
+    return DioClient.dio.post(
+      '/createusercardpurchasetransaction',
+      data: data,
+      options: Options(contentType: _json),
+    );
   }
 
   static Future<Response> createUserWalletPurchase(Map<String, dynamic> data) {
-    return DioClient.dio.post('/createuserwalletpurchase', data: data,
-        options: Options(contentType: _json));
+    return DioClient.dio.post(
+      '/createuserwalletpurchase',
+      data: data,
+      options: Options(contentType: _json),
+    );
   }
 
   static Future<Response> getWalletByUser(int user) {
@@ -59,8 +80,11 @@ class ProductService {
   }
 
   static Future<Response> depositToWallet(Map<String, dynamic> data) {
-    return DioClient.dio.post('/deposittowallet', data: data,
-        options: Options(contentType: _json));
+    return DioClient.dio.post(
+      '/deposittowallet',
+      data: data,
+      options: Options(contentType: _json),
+    );
   }
 
   static Future<Response> getErrorDictionaryList() {
@@ -79,9 +103,7 @@ class ProductService {
   /// Current consumable amounts of a machine (recalculated server-side from
   /// the consumable change records) plus the amount each product consumes.
   static Future<Response> getMachineConsumableList(String machineSerial) {
-    return DioClient.dio.get(
-      '/getmachineconsumablelist/$machineSerial',
-    );
+    return DioClient.dio.get('/getmachineconsumablelist/$machineSerial');
   }
 
   /// Latest batch of machine receipts for [machineSerial] that were created at
@@ -98,17 +120,32 @@ class ProductService {
   }
 
   static Future<Response> createErrorLog(Map<String, dynamic> data) {
-    return DioClient.dio.post('/createerrorlog', data: data,
-        options: Options(contentType: _json));
+    return DioClient.dio.post(
+      '/createerrorlog',
+      data: data,
+      options: Options(contentType: _json),
+    );
   }
 
   static Future<Response> createSensorData(Map<String, dynamic> data) {
-    return DioClient.dio.post('/createsensordata', data: data,
-        options: Options(contentType: _json));
+    return DioClient.dio.post(
+      '/createsensordata',
+      data: data,
+      options: Options(contentType: _json),
+    );
   }
 
-  static Future<Response> getCriticalErrorLogs(String machineSerial, {String? sinceIso}) {
-    final query = sinceIso != null ? '?since=${Uri.encodeComponent(sinceIso)}' : '';
-    return DioClient.dio.get('/getcriticalerrorlogs/$machineSerial$query');
+  static Future<Response> getCriticalErrorLogs(
+    String machineSerial, {
+    String? sinceIso,
+    List<int> watchedIds = const [],
+  }) {
+    final queryParameters = <String, dynamic>{};
+    if (sinceIso != null) queryParameters['since'] = sinceIso;
+    if (watchedIds.isNotEmpty) queryParameters['watched'] = watchedIds;
+    return DioClient.dio.get(
+      '/getcriticalerrorlogs/$machineSerial',
+      queryParameters: queryParameters,
+    );
   }
 }

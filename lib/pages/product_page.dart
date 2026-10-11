@@ -225,7 +225,7 @@ class _ProductPageState extends ConsumerState<ProductPage> {
                         ),
                       ),
                       ChoiceOption(
-                        title: 'لیوان خودم را استفاده می‌کنم',
+                        title: 'لیوان خودم',
                         icon: Icons.coffee,
                         serial: "no__cup",
                         priceDiff: -p["machine_products__price"],
@@ -579,7 +579,9 @@ class _ProductPageState extends ConsumerState<ProductPage> {
         return;
       }
       final data = response.data;
-      final qrSerial = data is Map ? int.tryParse(data['serial'].toString()) : null;
+      final qrSerial = data is Map
+          ? int.tryParse(data['serial'].toString())
+          : null;
       if (qrSerial == null) {
         _showQrStartError();
         return;
@@ -607,7 +609,9 @@ class _ProductPageState extends ConsumerState<ProductPage> {
 
   void _showQrStartError() {
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('ساخت بارکد پرداخت ناموفق بود. دوباره تلاش کنید.')),
+      const SnackBar(
+        content: Text('ساخت بارکد پرداخت ناموفق بود. دوباره تلاش کنید.'),
+      ),
     );
   }
 
@@ -1168,149 +1172,130 @@ class _ProductPageState extends ConsumerState<ProductPage> {
 
   // A final page to show the user what they selected
   Widget _buildSummaryPage() {
-    return Padding(
-      padding: const EdgeInsets.all(24.0),
-      child: Center(
-        child: SingleChildScrollView(
+    const detailCardWidth = 180.0;
+
+    Widget buildDetailCard(int index) {
+      return Card(
+        elevation: 2,
+        clipBehavior: Clip.antiAlias,
+        margin: EdgeInsets.zero,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16.0),
+          side: const BorderSide(color: Colors.transparent, width: 2.5),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              const Icon(Icons.check_circle, size: 80, color: Colors.teal),
-              const SizedBox(height: 24),
-              const Text(
-                'تایید سفارش',
-                style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+              Text(
+                _steps[index].title,
+                textAlign: TextAlign.center,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 15, color: Colors.black87),
               ),
-              const SizedBox(height: 32),
-              ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 400),
-                // GridView dynamically handles any number of items and ensures they are squares
-                child: GridView.builder(
-                  shrinkWrap: true,
-                  physics: const NeverScrollableScrollPhysics(),
-                  gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                    maxCrossAxisExtent:
-                        250, // Ensures items sit beside each other on mobile
-                    crossAxisSpacing: 16,
-                    mainAxisSpacing: 16,
-                    childAspectRatio: 1.5, // Forces perfect squares
-                  ),
-                  itemCount: _steps.length,
-                  itemBuilder: (context, optionIndex) {
-                    return Card(
-                      elevation: 2,
-                      clipBehavior: Clip.antiAlias,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16.0),
-                        side: BorderSide(color: Colors.transparent, width: 2.5),
-                      ),
-                      child: Padding(
-                        padding: const EdgeInsets.all(12.0),
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Text(
-                              _steps[optionIndex].title,
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                fontSize: 15,
-                                color: Colors.black87,
-                              ),
-                            ),
-                            const SizedBox(height: 12),
-                            Text(
-                              _steps[optionIndex].selectedOptionTitle ?? "",
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                fontSize: 15,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.black87,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    );
-                  },
+              const SizedBox(height: 12),
+              Text(
+                _steps[index].selectedOptionTitle ?? '',
+                textAlign: TextAlign.center,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.black87,
                 ),
-              ),
-              const SizedBox(height: 20),
-              FutureBuilder(
-                future: _finalPriceFuture,
-                builder: (context, snapshot) {
-                  Widget result;
-                  if (snapshot.connectionState == ConnectionState.waiting) {
-                    result = const Padding(
-                      padding: EdgeInsets.all(8.0),
-                      child: SizedBox(
-                        width: 24,
-                        height: 24,
-                        child: CircularProgressIndicator(strokeWidth: 2.5),
-                      ),
-                    );
-                  } else if (snapshot.hasData) {
-                    final finalrawprice = snapshot.data;
-                    result = Text(
-                      'مبلغ نهایی: ${persianFormatter.format(finalrawprice! / 10)} تومان',
-                      textDirection: .rtl,
-                      style: TextStyle(
-                        color: Colors.black87,
-                        fontSize: 17,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    );
-                  } else {
-                    result = SizedBox.shrink();
-                  }
-                  return result;
-                },
-              ),
-              const SizedBox(height: 20),
-              Wrap(
-                alignment: WrapAlignment.spaceEvenly,
-                runAlignment: WrapAlignment.spaceEvenly,
-                spacing: 20,
-                runSpacing: 20,
-                children: [
-                  _buildPaymentButton(
-                    index: 0,
-                    label: 'پرداخت با اشتراک',
-                    color: Colors.redAccent,
-                    onPressed: () {},
-                  ),
-                  _buildPaymentButton(
-                    index: 1,
-                    label: 'پرداخت با شاتکارت',
-                    color: Colors.deepOrange,
-                    onPressed: () {
-                      finalizeOrder();
-                      context.push("/nfc_use");
-                    },
-                  ),
-                  _buildPaymentButton(
-                    index: 2,
-                    label: 'پرداخت با تلفن همراه',
-                    color: Colors.blueAccent,
-                    isLoading: _isStartingPayment,
-                    onPressed: () {
-                      _startPhonePayment();
-                    },
-                  ),
-                  _buildPaymentButton(
-                    index: 3,
-                    label: 'پرداخت با کارتخوان',
-                    color: Colors.purple,
-                    isLoading: _isStartingPayment,
-                    onPressed: () {
-                      _startCardPayment();
-                    },
-                  ),
-                ],
               ),
             ],
           ),
         ),
-      ),
+      );
+    }
+
+    final orderDetails = Wrap(
+      alignment: WrapAlignment.center,
+      spacing: 12,
+      runSpacing: 12,
+      children: [
+        for (var index = 0; index < _steps.length; index++)
+          SizedBox(width: detailCardWidth, child: buildDetailCard(index)),
+      ],
+    );
+
+    final content = Column(
+      mainAxisSize: MainAxisSize.min,
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        orderDetails,
+        const SizedBox(height: 20),
+        FutureBuilder(
+          future: _finalPriceFuture,
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return const SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(strokeWidth: 2.5),
+              );
+            }
+            if (!snapshot.hasData) {
+              return const SizedBox.shrink();
+            }
+            return Text(
+              'مبلغ نهایی: ${persianFormatter.format(snapshot.data! / 10)} تومان',
+              textDirection: .rtl,
+              style: const TextStyle(
+                color: Colors.black87,
+                fontSize: 17,
+                fontWeight: FontWeight.bold,
+              ),
+            );
+          },
+        ),
+        const SizedBox(height: 20),
+        Wrap(
+          alignment: WrapAlignment.center,
+          spacing: 20,
+          runSpacing: 20,
+          children: [
+            _buildPaymentButton(
+              index: 0,
+              label: 'پرداخت با اشتراک',
+              color: Colors.redAccent,
+              onPressed: () {},
+            ),
+            _buildPaymentButton(
+              index: 1,
+              label: 'پرداخت با شاتکارت',
+              color: Colors.deepOrange,
+              onPressed: () {
+                finalizeOrder();
+                context.push("/nfc_use");
+              },
+            ),
+            _buildPaymentButton(
+              index: 2,
+              label: 'پرداخت با تلفن همراه',
+              color: Colors.blueAccent,
+              isLoading: _isStartingPayment,
+              onPressed: _startPhonePayment,
+            ),
+            _buildPaymentButton(
+              index: 3,
+              label: 'پرداخت با کارتخوان',
+              color: Colors.purple,
+              isLoading: _isStartingPayment,
+              onPressed: _startCardPayment,
+            ),
+          ],
+        ),
+      ],
+    );
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+      child: Center(child: SingleChildScrollView(child: content)),
     );
   }
 
