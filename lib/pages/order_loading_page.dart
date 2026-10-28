@@ -9,6 +9,7 @@ import 'package:flutter_production_test/pages/order_preparation_page.dart';
 import 'package:flutter_production_test/providers/active_machine_notifier_provider.dart';
 import 'package:flutter_production_test/providers/active_user_notifier_provider.dart';
 import 'package:flutter_production_test/providers/selected_products_notifier_provider.dart';
+import 'package:flutter_production_test/services/inactivity_service.dart';
 import 'package:flutter_production_test/services/product_service.dart';
 import 'package:flutter_production_test/widgets/browser_tab.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -81,6 +82,7 @@ class _OrderLoadingPageState extends ConsumerState<OrderLoadingPage>
 
   Timer? _pollTimer;
   Timer? _countdownTimer;
+  bool _holdsInactivityTimer = false;
 
   /// Lower bound for the receipt search. Backdated by a small safety margin so
   /// a purchase recorded a moment after this page opened is never missed
@@ -106,20 +108,28 @@ class _OrderLoadingPageState extends ConsumerState<OrderLoadingPage>
   void initState() {
     super.initState();
 
+    // This page has its own transaction countdown. Prevent the global
+    // inactivity timer from navigating away before the transaction timer
+    // finishes.
+    InactivityService.instance.acquireHold();
+    _holdsInactivityTimer = true;
+
     // Receipts created just before this page opened still belong to this
     // order (the card swipe tab may have confirmed very quickly), so the
     // search starts a little earlier rather than at this exact instant.
-    _searchedSince =
-        DateTime.now().toUtc().subtract(const Duration(seconds: 15));
+    _searchedSince = DateTime.now().toUtc().subtract(
+      const Duration(seconds: 15),
+    );
 
     _controller = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1500),
     )..repeat(reverse: true);
 
-    _scaleAnimation = Tween<double>(begin: 1.0, end: 1.15).animate(
-      CurvedAnimation(parent: _controller, curve: Curves.easeInOut),
-    );
+    _scaleAnimation = Tween<double>(
+      begin: 1.0,
+      end: 1.15,
+    ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeInOut));
 
     _remainingSeconds = OrderLoadingPage.timeout.inSeconds;
     _startCountdown();
@@ -195,6 +205,10 @@ class _OrderLoadingPageState extends ConsumerState<OrderLoadingPage>
     _pollTimer = null;
     _countdownTimer?.cancel();
     _countdownTimer = null;
+    if (_holdsInactivityTimer) {
+      _holdsInactivityTimer = false;
+      InactivityService.instance.releaseHold();
+    }
   }
 
   // Looks for a receipt batch created at or after [_searchedSince].
@@ -260,10 +274,7 @@ class _OrderLoadingPageState extends ConsumerState<OrderLoadingPage>
     // `push` rather than `go`: a `go` to the same location is a no-op, so a
     // second order would keep the first order's already-built page (and its
     // stale batch). Pushing always builds a new page with the new order.
-    context.push(
-      OrderPreparationPage.routePath,
-      extra: batch,
-    );
+    context.push(OrderPreparationPage.routePath, extra: batch);
   }
 
   void _onTimeout() {
@@ -415,7 +426,11 @@ class _OrderLoadingPageState extends ConsumerState<OrderLoadingPage>
               color: Colors.white,
               borderRadius: BorderRadius.circular(12),
             ),
-            child: QrImageView(data: url, size: 220, backgroundColor: Colors.white),
+            child: QrImageView(
+              data: url,
+              size: 220,
+              backgroundColor: Colors.white,
+            ),
           )
         else
           const CircularProgressIndicator(),
@@ -495,9 +510,7 @@ class _OrderLoadingPageState extends ConsumerState<OrderLoadingPage>
         SizedBox(
           width: 220,
           child: LinearProgressIndicator(
-            value:
-                1 -
-                (_remainingSeconds / OrderLoadingPage.timeout.inSeconds),
+            value: 1 - (_remainingSeconds / OrderLoadingPage.timeout.inSeconds),
           ),
         ),
       ],
@@ -534,7 +547,11 @@ class _OrderLoadingPageState extends ConsumerState<OrderLoadingPage>
                   color: colorScheme.primary,
                   shape: BoxShape.circle,
                 ),
-                child: Icon(Icons.check, size: 24, color: colorScheme.onPrimary),
+                child: Icon(
+                  Icons.check,
+                  size: 24,
+                  color: colorScheme.onPrimary,
+                ),
               ),
             ),
             const SizedBox(width: 16),

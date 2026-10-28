@@ -1,10 +1,21 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_production_test/pages/consumable_tray_view.dart';
+import 'package:flutter_production_test/pages/contract_settings_view.dart';
+import 'package:flutter_production_test/pages/machine_configuration_view.dart';
 import 'package:flutter_production_test/providers/active_machine_notifier_provider.dart';
 import 'package:flutter_production_test/services/product_service.dart';
 import 'package:flutter_production_test/widgets/machine_selector.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
+
+/// Sections listed in the side menu. The order matches the menu destinations.
+enum _SimulationSection {
+  sensorData,
+  machineConfiguration,
+  consumableTray,
+  contractSettings,
+}
 
 /// Displays the latest reading for each sensor and lets users submit new ones.
 class ErrorSimulationPage extends ConsumerStatefulWidget {
@@ -27,6 +38,7 @@ class _ErrorSimulationPageState extends ConsumerState<ErrorSimulationPage> {
   String? _resultMessage;
   String? _sortColumn;
   bool _sortAscending = true;
+  _SimulationSection _section = _SimulationSection.sensorData;
 
   static const List<double> _columnWidths = [180, 220, 260, 260, 200, 240];
   static const double _minimumTableWidth = 1360;
@@ -313,8 +325,6 @@ class _ErrorSimulationPageState extends ConsumerState<ErrorSimulationPage> {
 
   @override
   Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-
     return Directionality(
       textDirection: .rtl,
       child: Scaffold(
@@ -328,98 +338,168 @@ class _ErrorSimulationPageState extends ConsumerState<ErrorSimulationPage> {
             ),
           ],
         ),
-        body: _isLoadingSensors
-            ? const Center(child: CircularProgressIndicator())
-            : _loadError != null
-            ? Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(_loadError!),
-                    const SizedBox(height: 16),
-                    ElevatedButton(
-                      onPressed: () =>
-                          _loadSensors(ref.read(activeMachineProvider)),
-                      child: const Text('تلاش مجدد'),
-                    ),
-                  ],
-                ),
-              )
-            : Padding(
-                padding: const EdgeInsets.all(24),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text(
-                      'برای ثبت داده جدید، مقدار هر سنسور را ویرایش کنید؛ '
-                      'با زدن Enter یا خروج از فیلد ذخیره می‌شود.',
-                      style: Theme.of(context).textTheme.bodyMedium,
-                    ),
-                    const SizedBox(height: 16),
-                    if (_sensors.isEmpty)
-                      const Expanded(
-                        child: Center(
-                          child: Text('سنسوری برای این دستگاه یافت نشد'),
-                        ),
-                      )
-                    else
-                      Expanded(
-                        child: Card(
-                          clipBehavior: Clip.antiAlias,
-                          child: LayoutBuilder(
-                            builder: (context, constraints) {
-                              final tableWidth =
-                                  constraints.maxWidth < _minimumTableWidth
-                                  ? _minimumTableWidth
-                                  : constraints.maxWidth;
-                              return SingleChildScrollView(
-                                scrollDirection: Axis.horizontal,
-                                child: SizedBox(
-                                  width: tableWidth,
-                                  height: constraints.maxHeight,
-                                  child: Column(
-                                    children: [
-                                      _buildTable([
-                                        _buildHeaderRow(
-                                          colorScheme.surfaceContainerHighest,
-                                        ),
-                                      ]),
-                                      Expanded(
-                                        child: SingleChildScrollView(
-                                          child: _buildTable(
-                                            _sensors
-                                                .map(_buildSensorRow)
-                                                .toList(),
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              );
-                            },
-                          ),
-                        ),
-                      ),
-                    if (_resultMessage != null) ...[
-                      const SizedBox(height: 12),
-                      Text(
-                        _resultMessage!,
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          color:
-                              _resultMessage!.startsWith('خطا') ||
-                                  _resultMessage!.contains('معتبر نیست')
-                              ? colorScheme.error
-                              : colorScheme.primary,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
+        body: Row(
+          textDirection: .ltr,
+          children: [
+            Expanded(child: _buildSection()),
+            const VerticalDivider(width: 1),
+            Directionality(textDirection: .rtl, child: _buildSideMenu()),
+          ],
+        ),
       ),
     );
+  }
+
+  Widget _buildSideMenu() {
+    const destinations = [
+      (Icons.sensors_outlined, Icons.sensors, 'داده سنسورها'),
+      (Icons.settings_outlined, Icons.settings, 'تنظیمات دستگاه'),
+      (
+        Icons.inventory_2_outlined,
+        Icons.inventory_2,
+        'تنظیمات ستون جایگاه مواد مصرفی',
+      ),
+      (Icons.description_outlined, Icons.description, 'تنظیمات قرارداد'),
+    ];
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return SizedBox(
+      width: 280,
+      child: ListView.builder(
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+        itemCount: destinations.length,
+        itemBuilder: (context, index) {
+          final destination = destinations[index];
+          final selected = _section.index == index;
+          return Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Material(
+              color: selected
+                  ? colorScheme.secondaryContainer
+                  : Colors.transparent,
+              borderRadius: BorderRadius.circular(12),
+              child: ListTile(
+                selected: selected,
+                selectedColor: colorScheme.onSecondaryContainer,
+                contentPadding: const EdgeInsetsDirectional.only(
+                  start: 16,
+                  end: 20,
+                ),
+                minLeadingWidth: 32,
+                horizontalTitleGap: 16,
+                leading: Icon(selected ? destination.$2 : destination.$1),
+                title: Text(destination.$3),
+                onTap: () {
+                  setState(() => _section = _SimulationSection.values[index]);
+                },
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildSection() {
+    return switch (_section) {
+      _SimulationSection.sensorData => _buildSensorData(),
+      _SimulationSection.machineConfiguration =>
+        const MachineConfigurationView(),
+      _SimulationSection.consumableTray => const ConsumableTrayView(),
+      _SimulationSection.contractSettings => const ContractSettingsView(),
+    };
+  }
+
+  Widget _buildSensorData() {
+    final colorScheme = Theme.of(context).colorScheme;
+    return _isLoadingSensors
+        ? const Center(child: CircularProgressIndicator())
+        : _loadError != null
+        ? Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(_loadError!),
+                const SizedBox(height: 16),
+                ElevatedButton(
+                  onPressed: () =>
+                      _loadSensors(ref.read(activeMachineProvider)),
+                  child: const Text('تلاش مجدد'),
+                ),
+              ],
+            ),
+          )
+        : Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  'برای ثبت داده جدید، مقدار هر سنسور را ویرایش کنید؛ '
+                  'با زدن Enter یا خروج از فیلد ذخیره می‌شود.',
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+                const SizedBox(height: 16),
+                if (_sensors.isEmpty)
+                  const Expanded(
+                    child: Center(
+                      child: Text('سنسوری برای این دستگاه یافت نشد'),
+                    ),
+                  )
+                else
+                  Expanded(
+                    child: Card(
+                      clipBehavior: Clip.antiAlias,
+                      child: LayoutBuilder(
+                        builder: (context, constraints) {
+                          final tableWidth =
+                              constraints.maxWidth < _minimumTableWidth
+                              ? _minimumTableWidth
+                              : constraints.maxWidth;
+                          return SingleChildScrollView(
+                            scrollDirection: Axis.horizontal,
+                            child: SizedBox(
+                              width: tableWidth,
+                              height: constraints.maxHeight,
+                              child: Column(
+                                children: [
+                                  _buildTable([
+                                    _buildHeaderRow(
+                                      colorScheme.surfaceContainerHighest,
+                                    ),
+                                  ]),
+                                  Expanded(
+                                    child: SingleChildScrollView(
+                                      child: _buildTable(
+                                        _sensors.map(_buildSensorRow).toList(),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                if (_resultMessage != null) ...[
+                  const SizedBox(height: 12),
+                  Text(
+                    _resultMessage!,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color:
+                          _resultMessage!.startsWith('خطا') ||
+                              _resultMessage!.contains('معتبر نیست')
+                          ? colorScheme.error
+                          : colorScheme.primary,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          );
   }
 }

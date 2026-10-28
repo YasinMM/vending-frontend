@@ -13,6 +13,7 @@ import 'package:flutter_production_test/pages/online_payment_page.dart';
 import 'package:flutter_production_test/pages/phone_payment_page.dart';
 import 'package:flutter_production_test/pages/product_page.dart';
 import 'package:flutter_production_test/pages/screensaver_page.dart';
+import 'package:flutter_production_test/providers/active_machine_notifier_provider.dart';
 import 'package:flutter_production_test/services/critical_error_watch_service.dart';
 import 'package:flutter_production_test/services/inactivity_service.dart';
 import 'package:flutter_production_test/services/machine_preference_service.dart';
@@ -158,6 +159,10 @@ class _MainAppState extends ConsumerState<MainApp> {
 
   @override
   Widget build(BuildContext context) {
+    // Reload the inactivity timeout from the newly selected machine's standby_time
+    ref.listen<String>(activeMachineProvider, (_, serial) {
+      InactivityService.instance.setMachine(serial);
+    });
     // Every pointer interaction (tap, click, etc.) resets the inactivity timer
     return Listener(
       onPointerDown: (_) => InactivityService.instance.reset(),

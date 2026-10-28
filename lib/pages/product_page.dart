@@ -8,6 +8,7 @@ import 'package:flutter_production_test/data/classes/online_payment_url_builder.
 import 'package:flutter_production_test/pages/order_loading_page.dart';
 import 'package:flutter_production_test/providers/active_discounts_notifier_provider.dart';
 import 'package:flutter_production_test/providers/active_machine_notifier_provider.dart';
+import 'package:flutter_production_test/providers/payment_availability_notifier_provider.dart';
 import 'package:flutter_production_test/providers/selected_products_notifier_provider.dart';
 import 'package:flutter_production_test/services/product_service.dart';
 import 'package:flutter_production_test/widgets/loading_widgets.dart';
@@ -321,6 +322,7 @@ class _ProductPageState extends ConsumerState<ProductPage> {
   void initState() {
     getMachineProducts(ref.read(activeMachineProvider));
     loadMachineConsumables(ref.read(activeMachineProvider));
+    refreshPaymentAvailability(ref);
     // Listen for explicit clearing of the selected products (from the
     // transaction success page) and reset the order flow accordingly.
     ref.listenManual(selectedProductsProvider, (previous, next) {
@@ -340,6 +342,7 @@ class _ProductPageState extends ConsumerState<ProductPage> {
     ref.read(selectedProductsProvider.notifier).setProducts([]);
     _resetOrder();
     getMachineProducts(serial);
+    refreshPaymentAvailability(ref);
     loadMachineConsumables(serial);
   }
 
@@ -485,13 +488,42 @@ class _ProductPageState extends ConsumerState<ProductPage> {
     }
   }
 
+  // Whether the payment option at [index] of the summary page can be used.
+  bool _isSummaryOptionAvailable(int index) {
+    final availability = ref.read(paymentAvailabilityProvider);
+    switch (_summaryOptions[index]) {
+      case 'subscription':
+        return availability.subscriptionAllowed;
+      case 'card':
+        return availability.cardAvailable;
+      default:
+        return true;
+    }
+  }
+
+  // The first payment option of the summary page that can be used.
+  int _firstAvailableSummaryOption() {
+    for (var index = 0; index < _summaryOptions.length; index++) {
+      if (_isSummaryOptionAvailable(index)) {
+        return index;
+      }
+    }
+    return 0;
+  }
+
   // Moves the selection to the next option within the current step
   void _selectNextOption() {
     if (_currentIndex >= _steps.length) {
-      // Summary page: cycle through payment options
+      // Summary page: cycle through the payment options that can be used
       setState(() {
-        _selectedSummaryOption =
-            (_selectedSummaryOption + 1) % _summaryOptions.length;
+        var next = _selectedSummaryOption;
+        for (var attempt = 0; attempt < _summaryOptions.length; attempt++) {
+          next = (next + 1) % _summaryOptions.length;
+          if (_isSummaryOptionAvailable(next)) {
+            break;
+          }
+        }
+        _selectedSummaryOption = next;
       });
       return;
     }
@@ -543,7 +575,11 @@ class _ProductPageState extends ConsumerState<ProductPage> {
       return;
     }
 
-    // Summary page: OK acts like tapping the selected payment button
+    // Summary page: OK acts like tapping the selected payment button, but a
+    // payment option that cannot be used does nothing.
+    if (!_isSummaryOptionAvailable(_selectedSummaryOption)) {
+      return;
+    }
     switch (_summaryOptions[_selectedSummaryOption]) {
       case 'nfc':
         finalizeOrder();
@@ -836,6 +872,15 @@ class _ProductPageState extends ConsumerState<ProductPage> {
 
   @override
   Widget build(BuildContext context) {
+    // When the availability changes, move the summary highlight off a payment
+    // option that can no longer be used.
+    ref.listen<PaymentAvailability>(paymentAvailabilityProvider, (_, _) {
+      if (!_isSummaryOptionAvailable(_selectedSummaryOption)) {
+        setState(() {
+          _selectedSummaryOption = _firstAvailableSummaryOption();
+        });
+      }
+    });
     // PopScope ensures system back buttons (Android/Web) trigger our custom back logic
     return PopScope(
       canPop: _currentIndex == 0,
@@ -886,6 +931,11 @@ class _ProductPageState extends ConsumerState<ProductPage> {
                   _selectedSummaryOption = 0;
                 }
               });
+              // Sensor readings and contract settings can change, so they are
+              // read again every time the summary page is shown.
+              if (index == _steps.length) {
+                refreshPaymentAvailability(ref);
+              }
             },
             // +1 to account for the final summary page
             itemCount: _steps.length + 1,
@@ -1173,6 +1223,7 @@ class _ProductPageState extends ConsumerState<ProductPage> {
   // A final page to show the user what they selected
   Widget _buildSummaryPage() {
     const detailCardWidth = 180.0;
+    final availability = ref.watch(paymentAvailabilityProvider);
 
     Widget buildDetailCard(int index) {
       return Card(
@@ -1262,6 +1313,7 @@ class _ProductPageState extends ConsumerState<ProductPage> {
             _buildPaymentButton(
               index: 0,
               label: 'پرداخت با اشتراک',
+              enabled: availability.subscriptionAllowed,
               color: Colors.redAccent,
               onPressed: () {},
             ),
@@ -1285,6 +1337,7 @@ class _ProductPageState extends ConsumerState<ProductPage> {
               index: 3,
               label: 'پرداخت با کارتخوان',
               color: Colors.purple,
+              enabled: availability.cardAvailable,
               isLoading: _isStartingPayment,
               onPressed: _startCardPayment,
             ),
@@ -1305,6 +1358,7 @@ class _ProductPageState extends ConsumerState<ProductPage> {
     required int index,
     required String label,
     required Color color,
+    bool enabled = true,
     required VoidCallback onPressed,
     bool isLoading = false,
   }) {
@@ -1320,7 +1374,7 @@ class _ProductPageState extends ConsumerState<ProductPage> {
         ),
         elevation: isSelected ? 8 : 2,
       ),
-      onPressed: isLoading
+      onPressed: isLoading || !enabled
           ? null
           : () {
               setState(() {

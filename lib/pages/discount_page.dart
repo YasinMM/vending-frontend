@@ -8,6 +8,7 @@ import 'package:flutter_production_test/pages/order_loading_page.dart';
 import 'package:flutter_production_test/providers/active_discounts_notifier_provider.dart';
 import 'package:flutter_production_test/providers/active_machine_notifier_provider.dart';
 import 'package:flutter_production_test/providers/active_user_notifier_provider.dart';
+import 'package:flutter_production_test/providers/payment_availability_notifier_provider.dart';
 import 'package:flutter_production_test/providers/selected_products_notifier_provider.dart';
 import 'package:flutter_production_test/services/product_service.dart';
 import 'package:flutter_production_test/widgets/loading_widgets.dart';
@@ -162,53 +163,53 @@ class _DiscountPageState extends ConsumerState<DiscountPage> {
       int user = ref.read(activeUserProvider);
       String machineSerial = ref.read(activeMachineProvider);
 
-    List<String> productSerials = [];
-    List<int> quantities = [];
+      List<String> productSerials = [];
+      List<int> quantities = [];
 
-    final selectedProducts = ref.read(selectedProductsProvider);
+      final selectedProducts = ref.read(selectedProductsProvider);
 
-    for (Product product in selectedProducts) {
-      productSerials.add(product.serial);
-      quantities.add(product.quantity);
-    }
+      for (Product product in selectedProducts) {
+        productSerials.add(product.serial);
+        quantities.add(product.quantity);
+      }
 
-    final selectedDiscountCodes = ref
-        .read(activeDiscountsProvider)
-        .where((d) => d.selected)
-        .map((d) => d.code)
-        .toList();
+      final selectedDiscountCodes = ref
+          .read(activeDiscountsProvider)
+          .where((d) => d.selected)
+          .map((d) => d.code)
+          .toList();
 
-    final calculatedAmount = await calculateFinalRawPrice({
-      "discount_codes": selectedDiscountCodes,
-      "machine_serial": machineSerial,
-      "product_serials": productSerials,
-      "quantities": quantities,
-    });
-
-    if (user == -1) {
-      await ProductService.createCardPurchaseTransaction({
-        "creation_date": utcNowIso(),
+      final calculatedAmount = await calculateFinalRawPrice({
         "discount_codes": selectedDiscountCodes,
-        "bank_serial": "234556",
         "machine_serial": machineSerial,
-        "amount": calculatedAmount,
         "product_serials": productSerials,
         "quantities": quantities,
       });
-    } else {
-      await ProductService.createUserCardPurchaseTransaction({
-        "creation_date": utcNowIso(),
-        "discount_codes": selectedDiscountCodes,
-        "user": user,
-        "bank_serial": "234556",
-        "machine_serial": machineSerial,
-        "amount": calculatedAmount,
-        "product_serials": productSerials,
-        "quantities": quantities,
-      });
-    }
 
-    return true;
+      if (user == -1) {
+        await ProductService.createCardPurchaseTransaction({
+          "creation_date": utcNowIso(),
+          "discount_codes": selectedDiscountCodes,
+          "bank_serial": "234556",
+          "machine_serial": machineSerial,
+          "amount": calculatedAmount,
+          "product_serials": productSerials,
+          "quantities": quantities,
+        });
+      } else {
+        await ProductService.createUserCardPurchaseTransaction({
+          "creation_date": utcNowIso(),
+          "discount_codes": selectedDiscountCodes,
+          "user": user,
+          "bank_serial": "234556",
+          "machine_serial": machineSerial,
+          "amount": calculatedAmount,
+          "product_serials": productSerials,
+          "quantities": quantities,
+        });
+      }
+
+      return true;
     } finally {
       if (mounted) {
         setState(() {
@@ -217,7 +218,6 @@ class _DiscountPageState extends ConsumerState<DiscountPage> {
       }
     }
   }
-
 
   @override
   void initState() {
@@ -240,14 +240,29 @@ class _DiscountPageState extends ConsumerState<DiscountPage> {
         if (_selectedOptionIndex >= discountCount) {
           // Wrap around: confirm pseudo-option goes back to the first option
           _selectedOptionIndex = 0;
-          _skipUnavailableDiscounts(orderedDiscounts, discountCount, forward: true);
+          _skipUnavailableDiscounts(
+            orderedDiscounts,
+            discountCount,
+            forward: true,
+          );
         } else {
           _selectedOptionIndex++;
-          _skipUnavailableDiscounts(orderedDiscounts, discountCount, forward: true);
+          _skipUnavailableDiscounts(
+            orderedDiscounts,
+            discountCount,
+            forward: true,
+          );
         }
       } else {
-        _selectedPaymentIndex =
-            (_selectedPaymentIndex + 1) % _paymentButtonCount;
+        // Skip payment buttons that are disabled
+        var next = _selectedPaymentIndex;
+        for (var attempt = 0; attempt < _paymentButtonCount; attempt++) {
+          next = (next + 1) % _paymentButtonCount;
+          if (_isPaymentButtonEnabled(next)) {
+            break;
+          }
+        }
+        _selectedPaymentIndex = next;
       }
     });
   }
@@ -303,7 +318,7 @@ class _DiscountPageState extends ConsumerState<DiscountPage> {
     if (_selectedOptionIndex >= orderedDiscounts.length) {
       setState(() {
         _paymentMode = true;
-        _selectedPaymentIndex = 0;
+        _selectedPaymentIndex = _firstEnabledPaymentIndex();
       });
       return;
     }
@@ -358,13 +373,24 @@ class _DiscountPageState extends ConsumerState<DiscountPage> {
     return count;
   }
 
+  // The first payment button that can be used.
+  int _firstEnabledPaymentIndex() {
+    for (var index = 0; index < _paymentButtonCount; index++) {
+      if (_isPaymentButtonEnabled(index)) {
+        return index;
+      }
+    }
+    return 0;
+  }
+
   // Whether the payment button at the given index is enabled
   bool _isPaymentButtonEnabled(int index) {
     if (_finalPrice == 0) {
       return true; // تکمیل سفارش
     }
     if (index == 0) {
-      return true; // پرداخت با کارت
+      // Card payment is disabled while the POS sensor reads 0
+      return ref.read(paymentAvailabilityProvider).cardAvailable;
     }
     // کیف پول / افزایش اعتبار
     return _walletBalance != null && _finalPrice != null && _walletBalance! > 0;
@@ -461,10 +487,7 @@ class _DiscountPageState extends ConsumerState<DiscountPage> {
           quantities: quantities,
         );
         if (mounted) {
-          context.go(
-            OrderLoadingPage.routePath,
-            extra: {'payload': payload},
-          );
+          context.go(OrderLoadingPage.routePath, extra: {'payload': payload});
         }
       }
     }
@@ -492,6 +515,8 @@ class _DiscountPageState extends ConsumerState<DiscountPage> {
 
   @override
   Widget build(BuildContext context) {
+    // Rebuild when the card availability changes (the POS sensor reading).
+    ref.watch(paymentAvailabilityProvider);
     _discounts = ref.watch(activeDiscountsProvider);
     final selectedProductSerials = ref
         .watch(selectedProductsProvider)
@@ -527,358 +552,375 @@ class _DiscountPageState extends ConsumerState<DiscountPage> {
       child: Scaffold(
         appBar: AppBar(title: const Text('تکمیل خرید'), centerTitle: true),
         body: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            Text(
-              'تخفیف های قابل انتخاب:',
-              textDirection: .rtl,
-              textAlign: TextAlign.right,
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 16),
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                'تخفیف های قابل انتخاب:',
+                textDirection: .rtl,
+                textAlign: TextAlign.right,
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 16),
 
-            Expanded(
-              child: orderedDiscounts.isEmpty
-                  ? Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(
-                            Icons.local_offer_outlined,
-                            size: 64,
-                            color: Colors.grey.shade400,
-                          ),
-                          const SizedBox(height: 16),
-                          Text(
-                            'تخفیفی موجود نیست',
-                            textDirection: .rtl,
-                            style: TextStyle(
-                              fontSize: 16,
-                              color: Colors.grey.shade600,
+              Expanded(
+                child: orderedDiscounts.isEmpty
+                    ? Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              Icons.local_offer_outlined,
+                              size: 64,
+                              color: Colors.grey.shade400,
                             ),
-                          ),
-                        ],
-                      ),
-                    )
-                  : GridView.builder(
-                gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                  maxCrossAxisExtent: 300,
-                  crossAxisSpacing: 12,
-                  mainAxisSpacing: 12,
-                  childAspectRatio: 1.6, // Shorter cards to avoid scrolling
-                ),
-                itemCount: orderedDiscounts.length + 1,
-                itemBuilder: (context, index) {
-                  // Extra trailing item: the "confirm" pseudo-option
-                  if (index == orderedDiscounts.length) {
-                    final isHighlighted =
-                        !_paymentMode &&
-                        _selectedOptionIndex == index;
-                    return Directionality(
-                      textDirection: .rtl,
-                      child: Card(
-                        color: isHighlighted
-                            ? Colors.amber.withValues(alpha: 0.15)
-                            : null,
-                        elevation: isHighlighted ? 6 : 1,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12.0),
-                          side: BorderSide(
-                            color: isHighlighted
-                                ? Colors.amber
-                                : Colors.transparent,
-                            width: isHighlighted ? 3 : 2,
-                          ),
+                            const SizedBox(height: 16),
+                            Text(
+                              'تخفیفی موجود نیست',
+                              textDirection: .rtl,
+                              style: TextStyle(
+                                fontSize: 16,
+                                color: Colors.grey.shade600,
+                              ),
+                            ),
+                          ],
                         ),
-                        child: InkWell(
-                          onTap: () {
-                            setState(() {
-                              _paymentMode = true;
-                              _selectedPaymentIndex = 0;
-                            });
-                          },
-                          child: Padding(
-                            padding: const EdgeInsets.all(12.0),
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
+                      )
+                    : GridView.builder(
+                        gridDelegate:
+                            const SliverGridDelegateWithMaxCrossAxisExtent(
+                              maxCrossAxisExtent: 300,
+                              crossAxisSpacing: 12,
+                              mainAxisSpacing: 12,
+                              childAspectRatio:
+                                  1.6, // Shorter cards to avoid scrolling
+                            ),
+                        itemCount: orderedDiscounts.length + 1,
+                        itemBuilder: (context, index) {
+                          // Extra trailing item: the "confirm" pseudo-option
+                          if (index == orderedDiscounts.length) {
+                            final isHighlighted =
+                                !_paymentMode && _selectedOptionIndex == index;
+                            return Directionality(
+                              textDirection: .rtl,
+                              child: Card(
+                                color: isHighlighted
+                                    ? Colors.amber.withValues(alpha: 0.15)
+                                    : null,
+                                elevation: isHighlighted ? 6 : 1,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12.0),
+                                  side: BorderSide(
+                                    color: isHighlighted
+                                        ? Colors.amber
+                                        : Colors.transparent,
+                                    width: isHighlighted ? 3 : 2,
+                                  ),
+                                ),
+                                child: InkWell(
+                                  onTap: () {
+                                    setState(() {
+                                      _paymentMode = true;
+                                      _selectedPaymentIndex = 0;
+                                    });
+                                  },
+                                  child: Padding(
+                                    padding: const EdgeInsets.all(12.0),
+                                    child: Column(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.center,
+                                      children: [
+                                        Icon(
+                                          Icons.check_circle_outline,
+                                          size: 40,
+                                          color: isHighlighted
+                                              ? Theme.of(
+                                                  context,
+                                                ).colorScheme.primary
+                                              : Colors.green,
+                                        ),
+                                        const SizedBox(height: 8),
+                                        Text(
+                                          'تایید و ادامه',
+                                          textAlign: TextAlign.center,
+                                          style: TextStyle(
+                                            fontWeight: FontWeight.bold,
+                                            color: isHighlighted
+                                                ? Theme.of(
+                                                    context,
+                                                  ).colorScheme.primary
+                                                : Colors.black87,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          'رفتن به گزینه های پرداخت',
+                                          textAlign: TextAlign.center,
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            color: Colors.grey.shade600,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            );
+                          }
+
+                          final discount = orderedDiscounts[index];
+                          final isAvailable = _isDiscountAvailable(
+                            discount,
+                            selectedProductSerials,
+                          );
+                          final isSelected =
+                              isAvailable &&
+                              _selectedDiscountCodes.contains(discount.code);
+                          final isHighlighted =
+                              !_paymentMode && _selectedOptionIndex == index;
+
+                          return Directionality(
+                            textDirection: .rtl,
+                            child: Opacity(
+                              opacity: isAvailable ? 1.0 : 0.55,
+                              child: Card(
+                                color: isAvailable
+                                    ? isHighlighted
+                                          ? Colors.amber.withValues(alpha: 0.15)
+                                          : null
+                                    : Colors.grey[200],
+                                elevation: isSelected || isHighlighted ? 4 : 1,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12.0),
+                                  side: BorderSide(
+                                    color: isHighlighted
+                                        ? Colors.amber
+                                        : isSelected
+                                        ? Theme.of(context).colorScheme.primary
+                                        : isAvailable
+                                        ? Colors.transparent
+                                        : Colors.grey.shade400,
+                                    width: isHighlighted ? 3 : 2,
+                                  ),
+                                ),
+                                child: InkWell(
+                                  onTap: isAvailable
+                                      ? () {
+                                          setState(() {
+                                            if (_selectedDiscountCodes.contains(
+                                              discount.code,
+                                            )) {
+                                              _selectedDiscountCodes.remove(
+                                                discount.code,
+                                              );
+                                            } else {
+                                              _selectedDiscountCodes.add(
+                                                discount.code,
+                                              );
+                                            }
+                                          });
+                                          _updateFinalPrice(selectedProducts);
+                                        }
+                                      : null,
+                                  child: Padding(
+                                    padding: const EdgeInsets.all(12.0),
+                                    child: Column(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.center,
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.center,
+                                      children: [
+                                        // Selection indicator
+                                        Icon(
+                                          isSelected
+                                              ? Icons.check_box
+                                              : Icons.check_box_outline_blank,
+                                          size: 28,
+                                          color: isSelected
+                                              ? Theme.of(
+                                                  context,
+                                                ).colorScheme.primary
+                                              : Colors.grey.shade600,
+                                        ),
+                                        const SizedBox(height: 6),
+                                        Text(
+                                          discount.name,
+                                          textAlign: TextAlign.center,
+                                          style: TextStyle(
+                                            fontWeight: FontWeight.bold,
+                                            color: isAvailable
+                                                ? isSelected
+                                                      ? Theme.of(
+                                                          context,
+                                                        ).colorScheme.primary
+                                                      : Colors.black87
+                                                : Colors.black54,
+                                          ),
+                                        ),
+                                        if (discount.pinned) ...[
+                                          const SizedBox(height: 4),
+                                          Container(
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 8,
+                                              vertical: 2,
+                                            ),
+                                            decoration: BoxDecoration(
+                                              color: Colors.orange,
+                                              borderRadius:
+                                                  BorderRadius.circular(4),
+                                            ),
+                                            child: const Text(
+                                              'ویژه دستگاه',
+                                              textDirection: .rtl,
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                fontWeight: FontWeight.w500,
+                                                color: Colors.white,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                        if (discount.description != null &&
+                                            discount
+                                                .description!
+                                                .isNotEmpty) ...[
+                                          const SizedBox(height: 4),
+                                          Flexible(
+                                            child: FittedBox(
+                                              fit: BoxFit.scaleDown,
+                                              child: Text(
+                                                discount.description!,
+                                                textAlign: TextAlign.center,
+                                                maxLines: 2,
+                                                textDirection: .rtl,
+                                                style: TextStyle(
+                                                  fontSize: 11,
+                                                  color: isAvailable
+                                                      ? Colors.black54
+                                                      : Colors.black38,
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                        const SizedBox(height: 6),
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 8,
+                                            vertical: 2,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: Colors.grey[200],
+                                            borderRadius: BorderRadius.circular(
+                                              4,
+                                            ),
+                                          ),
+                                          child: Text(
+                                            'کد: ${discount.code}',
+                                            textDirection: .rtl,
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.w500,
+                                              color: isAvailable
+                                                  ? Colors.black54
+                                                  : Colors.black38,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+              ),
+
+              const SizedBox(height: 16),
+
+              SizedBox(
+                width: double.infinity,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Text(
+                      _isLoadingPrice
+                          ? 'قیمت نهایی: در حال محاسبه...'
+                          : _finalPrice == null
+                          ? 'قیمت نهایی: --'
+                          : _finalPrice == 0
+                          ? 'قیمت نهایی: رایگان'
+                          : 'قیمت نهایی: ${persianFormatter.format(_finalPrice! / 10)} تومان',
+                      textDirection: .rtl,
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    SizedBox(height: 16),
+                    Wrap(
+                      alignment: WrapAlignment.center,
+                      spacing: 12,
+                      runSpacing: 12,
+                      children: [
+                        if (_finalPrice == 0)
+                          _buildPaymentButton(
+                            index: 0,
+                            label: 'تکمیل سفارش',
+                            color: Colors.green,
+                            orderedDiscounts: orderedDiscounts,
+                          )
+                        else ...[
+                          _buildPaymentButton(
+                            index: 0,
+                            label: 'پرداخت با کارت',
+                            color: Colors.deepOrange,
+                            orderedDiscounts: orderedDiscounts,
+                          ),
+                          if (ref.watch(activeUserProvider) != -1)
+                            Column(
                               children: [
-                                Icon(
-                                  Icons.check_circle_outline,
-                                  size: 40,
-                                  color: isHighlighted
-                                      ? Theme.of(context).colorScheme.primary
-                                      : Colors.green,
+                                _buildPaymentButton(
+                                  index: 1,
+                                  label:
+                                      _walletBalance != null &&
+                                          _finalPrice != null &&
+                                          _walletBalance! > 0 &&
+                                          _walletBalance! < _finalPrice!
+                                      ? 'افزایش اعتبار'
+                                      : 'پرداخت با کیف پول',
+                                  color: Colors.teal,
+                                  orderedDiscounts: orderedDiscounts,
                                 ),
                                 const SizedBox(height: 8),
                                 Text(
-                                  'تایید و ادامه',
-                                  textAlign: TextAlign.center,
-                                  style: TextStyle(
+                                  _walletBalance == null
+                                      ? (_isLoadingWallet
+                                            ? 'موجودی: در حال دریافت...'
+                                            : 'موجودی: --')
+                                      : 'موجودی: ${persianFormatter.format(_walletBalance! / 10)} ت',
+                                  textDirection: .rtl,
+                                  style: const TextStyle(
+                                    fontSize: 14,
                                     fontWeight: FontWeight.bold,
-                                    color: isHighlighted
-                                        ? Theme.of(
-                                            context,
-                                          ).colorScheme.primary
-                                        : Colors.black87,
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  'رفتن به گزینه های پرداخت',
-                                  textAlign: TextAlign.center,
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: Colors.grey.shade600,
                                   ),
                                 ),
                               ],
                             ),
-                          ),
-                        ),
-                      ),
-                    );
-                  }
-
-                  final discount = orderedDiscounts[index];
-                  final isAvailable = _isDiscountAvailable(
-                    discount,
-                    selectedProductSerials,
-                  );
-                  final isSelected =
-                      isAvailable &&
-                      _selectedDiscountCodes.contains(discount.code);
-                  final isHighlighted =
-                      !_paymentMode && _selectedOptionIndex == index;
-
-                  return Directionality(
-                    textDirection: .rtl,
-                    child: Opacity(
-                      opacity: isAvailable ? 1.0 : 0.55,
-                      child: Card(
-                        color: isAvailable
-                            ? isHighlighted
-                                  ? Colors.amber.withValues(alpha: 0.15)
-                                  : null
-                            : Colors.grey[200],
-                        elevation: isSelected || isHighlighted ? 4 : 1,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12.0),
-                          side: BorderSide(
-                            color: isHighlighted
-                                ? Colors.amber
-                                : isSelected
-                                ? Theme.of(context).colorScheme.primary
-                                : isAvailable
-                                ? Colors.transparent
-                                : Colors.grey.shade400,
-                            width: isHighlighted ? 3 : 2,
-                          ),
-                        ),
-                        child: InkWell(
-                          onTap: isAvailable
-                              ? () {
-                                  setState(() {
-                                    if (_selectedDiscountCodes.contains(
-                                      discount.code,
-                                    )) {
-                                      _selectedDiscountCodes.remove(
-                                        discount.code,
-                                      );
-                                    } else {
-                                      _selectedDiscountCodes.add(discount.code);
-                                    }
-                                  });
-                                  _updateFinalPrice(selectedProducts);
-                                }
-                              : null,
-                          child: Padding(
-                            padding: const EdgeInsets.all(12.0),
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              crossAxisAlignment: CrossAxisAlignment.center,
-                              children: [
-                                // Selection indicator
-                                Icon(
-                                  isSelected
-                                      ? Icons.check_box
-                                      : Icons.check_box_outline_blank,
-                                  size: 28,
-                                  color: isSelected
-                                      ? Theme.of(context).colorScheme.primary
-                                      : Colors.grey.shade600,
-                                ),
-                                const SizedBox(height: 6),
-                                Text(
-                                  discount.name,
-                                  textAlign: TextAlign.center,
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    color: isAvailable
-                                        ? isSelected
-                                            ? Theme.of(
-                                                context,
-                                              ).colorScheme.primary
-                                            : Colors.black87
-                                        : Colors.black54,
-                                  ),
-                                ),
-                                if (discount.pinned) ...[
-                                  const SizedBox(height: 4),
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 8,
-                                      vertical: 2,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: Colors.orange,
-                                      borderRadius: BorderRadius.circular(4),
-                                    ),
-                                    child: const Text(
-                                      'ویژه دستگاه',
-                                      textDirection: .rtl,
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.w500,
-                                        color: Colors.white,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                                if (discount.description != null &&
-                                    discount.description!.isNotEmpty) ...[
-                                  const SizedBox(height: 4),
-                                  Flexible(
-                                    child: FittedBox(
-                                      fit: BoxFit.scaleDown,
-                                      child: Text(
-                                        discount.description!,
-                                        textAlign: TextAlign.center,
-                                        maxLines: 2,
-                                        textDirection: .rtl,
-                                        style: TextStyle(
-                                          fontSize: 11,
-                                          color: isAvailable
-                                              ? Colors.black54
-                                              : Colors.black38,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                                const SizedBox(height: 6),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 8,
-                                    vertical: 2,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: Colors.grey[200],
-                                    borderRadius: BorderRadius.circular(4),
-                                  ),
-                                  child: Text(
-                                    'کد: ${discount.code}',
-                                    textDirection: .rtl,
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w500,
-                                      color: isAvailable
-                                          ? Colors.black54
-                                          : Colors.black38,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  );
-                },
-              ),
-            ),
-
-            const SizedBox(height: 16),
-
-            SizedBox(
-              width: double.infinity,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  Text(
-                    _isLoadingPrice
-                        ? 'قیمت نهایی: در حال محاسبه...'
-                        : _finalPrice == null
-                        ? 'قیمت نهایی: --'
-                        : _finalPrice == 0
-                        ? 'قیمت نهایی: رایگان'
-                        : 'قیمت نهایی: ${persianFormatter.format(_finalPrice! / 10)} تومان',
-                    textDirection: .rtl,
-                    style: const TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  SizedBox(height: 16),
-                  Wrap(
-                    alignment: WrapAlignment.center,
-                    spacing: 12,
-                    runSpacing: 12,
-                    children: [
-                      if (_finalPrice == 0)
-                        _buildPaymentButton(
-                          index: 0,
-                          label: 'تکمیل سفارش',
-                          color: Colors.green,
-                          orderedDiscounts: orderedDiscounts,
-                        )
-                      else ...[
-                        _buildPaymentButton(
-                          index: 0,
-                          label: 'پرداخت با کارت',
-                          color: Colors.deepOrange,
-                          orderedDiscounts: orderedDiscounts,
-                        ),
-                        if (ref.watch(activeUserProvider) != -1)
-                          Column(
-                            children: [
-                              _buildPaymentButton(
-                                index: 1,
-                                label:
-                                    _walletBalance != null &&
-                                        _finalPrice != null &&
-                                        _walletBalance! > 0 &&
-                                        _walletBalance! < _finalPrice!
-                                    ? 'افزایش اعتبار'
-                                    : 'پرداخت با کیف پول',
-                                color: Colors.teal,
-                                orderedDiscounts: orderedDiscounts,
-                              ),
-                              const SizedBox(height: 8),
-                              Text(
-                                _walletBalance == null
-                                    ? (_isLoadingWallet ? 'موجودی: در حال دریافت...' : 'موجودی: --')
-                                    : 'موجودی: ${persianFormatter.format(_walletBalance! / 10)} ت',
-                                textDirection: .rtl,
-                                style: const TextStyle(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ],
-                          ),
+                        ],
                       ],
-                    ],
-                  ),
-                ],
+                    ),
+                  ],
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
-      ),
-      bottomNavigationBar: _buildBottomNavBar(orderedDiscounts),
+        bottomNavigationBar: _buildBottomNavBar(orderedDiscounts),
       ),
     );
   }
@@ -922,7 +964,10 @@ class _DiscountPageState extends ConsumerState<DiscountPage> {
                 color: Colors.white,
               ),
             )
-          : Text(label, style: const TextStyle(fontSize: 16, color: Colors.white)),
+          : Text(
+              label,
+              style: const TextStyle(fontSize: 16, color: Colors.white),
+            ),
     );
   }
 
@@ -939,7 +984,10 @@ class _DiscountPageState extends ConsumerState<DiscountPage> {
             // Left button: back (same as the previous OK long-press behavior)
             IconButton.filledTonal(
               onPressed: _goBack,
-              icon: const Icon(Icons.subdirectory_arrow_left, color: Colors.red),
+              icon: const Icon(
+                Icons.subdirectory_arrow_left,
+                color: Colors.red,
+              ),
               tooltip: 'بازگشت',
             ),
             const SizedBox(width: 16),

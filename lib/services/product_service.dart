@@ -95,6 +95,57 @@ class ProductService {
     return DioClient.dio.get('/getmachinelist');
   }
 
+  /// The contract currently active for [machineSerial]. Responds with 404
+  /// when the machine has no active contract.
+  static Future<Response> getMachineContract(String machineSerial) {
+    return DioClient.dio.get('/getmachinecontract/$machineSerial');
+  }
+
+  /// Partially updates the contract with [contractId]. Only the keys present
+  /// in [data] are changed.
+  static Future<Response> updateContract(
+    int contractId,
+    Map<String, dynamic> data,
+  ) {
+    return DioClient.dio.patch(
+      '/updatecontract/$contractId',
+      data: data,
+      options: Options(contentType: _json),
+    );
+  }
+
+  /// Partially updates the machine identified by [machineSerial]. Only the
+  /// keys present in [data] are changed.
+  static Future<Response> updateMachine(
+    String machineSerial,
+    Map<String, dynamic> data,
+  ) {
+    return DioClient.dio.patch(
+      '/updatemachine/$machineSerial',
+      data: data,
+      options: Options(contentType: _json),
+    );
+  }
+
+  static Future<Response> getMachineConsumableAssignments(
+    String machineSerial,
+  ) {
+    return DioClient.dio.get('/getmachineconsumableassignments/$machineSerial');
+  }
+
+  /// Assigns a machine consumable to [machineSensorId], or unsets the
+  /// assignment when [machineSensorId] is null.
+  static Future<Response> updateMachineConsumableSensor(
+    int machineConsumableId,
+    int? machineSensorId,
+  ) {
+    return DioClient.dio.patch(
+      '/updatemachineconsumablesensor/$machineConsumableId',
+      data: {'machine_sensor': machineSensorId},
+      options: Options(contentType: _json),
+    );
+  }
+
   static Future<Response> getSensorList({String? machineSerial}) {
     final query = machineSerial != null ? '?machine=$machineSerial' : '';
     return DioClient.dio.get('/getsensorlist$query');
