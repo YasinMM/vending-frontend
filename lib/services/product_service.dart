@@ -1,5 +1,8 @@
+import 'dart:convert';
+
 import 'package:dio/dio.dart';
 import 'package:flutter_production_test/main.dart';
+import 'package:flutter_production_test/services/admin_auth_session.dart';
 
 class ProductService {
   // JSON content type, set per request rather than globally so that GET calls
@@ -93,6 +96,50 @@ class ProductService {
 
   static Future<Response> getMachineList() {
     return DioClient.dio.get('/getmachinelist');
+  }
+
+  static Future<Response> authenticateAdmin(
+    String username,
+    String password,
+  ) async {
+    final authorization =
+        'Basic ${base64Encode(utf8.encode('$username:$password'))}';
+    final response = await DioClient.dio.get(
+      '/admin-api/machines',
+      options: Options(headers: {'Authorization': authorization}),
+    );
+    AdminAuthSession.setCredentials(username, password);
+    return response;
+  }
+
+  static Future<Response> getAdminMachineList() {
+    return DioClient.dio.get('/admin-api/machines');
+  }
+
+  static Future<Response> getAdminMachineDetails(
+    String machineSerial, {
+    required String section,
+    int offset = 0,
+    int limit = 50,
+  }) {
+    return DioClient.dio.get(
+      '/admin-api/machines/${Uri.encodeComponent(machineSerial)}/details',
+      queryParameters: {'section': section, 'offset': offset, 'limit': limit},
+    );
+  }
+
+  static Future<Response> updateAdminMachineRecord(
+    String machineSerial, {
+    required String resource,
+    required int recordId,
+    required Map<String, dynamic> data,
+  }) {
+    return DioClient.dio.patch(
+      '/admin-api/machines/${Uri.encodeComponent(machineSerial)}/records/'
+      '$resource/$recordId',
+      data: data,
+      options: Options(contentType: _json),
+    );
   }
 
   /// The contract currently active for [machineSerial]. Responds with 404

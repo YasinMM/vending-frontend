@@ -7,6 +7,7 @@ import 'package:flutter_production_test/providers/active_machine_notifier_provid
 import 'package:flutter_production_test/services/product_service.dart';
 import 'package:flutter_production_test/widgets/machine_selector.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
 /// Sections listed in the side menu. The order matches the menu destinations.
@@ -332,6 +333,11 @@ class _ErrorSimulationPageState extends ConsumerState<ErrorSimulationPage> {
           title: const Text('شبیه‌سازی خطا در سرور'),
           centerTitle: true,
           actions: [
+            TextButton.icon(
+              onPressed: () => context.push('/admin/machines'),
+              icon: const Icon(Icons.admin_panel_settings_outlined),
+              label: const Text('پنل مدیریت'),
+            ),
             Padding(
               padding: const EdgeInsets.only(left: 12, right: 8),
               child: Center(child: MachineSelector(onChanged: _loadSensors)),

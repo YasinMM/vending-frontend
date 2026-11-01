@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_production_test/data/classes/card_payment_payload.dart';
 import 'package:flutter_production_test/data/classes/receipt_batch.dart';
 import 'package:flutter_production_test/pages/card_swipe_page.dart';
+import 'package:flutter_production_test/pages/admin_machine_monitoring_page.dart';
+import 'package:flutter_production_test/pages/admin_machine_details_page.dart';
 import 'package:flutter_production_test/pages/order_loading_page.dart';
 import 'package:flutter_production_test/pages/order_preparation_page.dart';
 import 'package:flutter_production_test/pages/transaction_success_page.dart';
@@ -14,6 +16,7 @@ import 'package:flutter_production_test/pages/phone_payment_page.dart';
 import 'package:flutter_production_test/pages/product_page.dart';
 import 'package:flutter_production_test/pages/screensaver_page.dart';
 import 'package:flutter_production_test/providers/active_machine_notifier_provider.dart';
+import 'package:flutter_production_test/services/admin_auth_session.dart';
 import 'package:flutter_production_test/services/critical_error_watch_service.dart';
 import 'package:flutter_production_test/services/inactivity_service.dart';
 import 'package:flutter_production_test/services/machine_preference_service.dart';
@@ -29,17 +32,13 @@ Future<void> main() async {
   runApp(ProviderScope(child: MainApp()));
 }
 
-
 // تعریف صفحه ها
 final routeObserver = RouteObserver<ModalRoute<void>>();
 
 final _router = GoRouter(
   observers: [routeObserver],
   routes: [
-    GoRoute(
-      path: '/',
-      builder: (context, state) => const ProductPage(),
-    ),
+    GoRoute(path: '/', builder: (context, state) => const ProductPage()),
     GoRoute(
       path: '/discounts',
       builder: (context, state) => const DiscountPage(),
@@ -61,10 +60,7 @@ final _router = GoRouter(
         );
       },
     ),
-    GoRoute(
-      path: '/nfc_use',
-      builder: (context, state) => const NfcUsePage(),
-    ),
+    GoRoute(path: '/nfc_use', builder: (context, state) => const NfcUsePage()),
     GoRoute(
       path: '/phone_payment',
       builder: (context, state) => const PhonePaymentPage(),
@@ -116,6 +112,16 @@ final _router = GoRouter(
       builder: (context, state) => const ErrorSimulationPage(),
     ),
     GoRoute(
+      path: AdminMachineMonitoringPage.routePath,
+      builder: (context, state) => const AdminMachineMonitoringPage(),
+    ),
+    GoRoute(
+      path: '${AdminMachineDetailsPage.routePath}/:serial',
+      builder: (context, state) => AdminMachineDetailsPage(
+        machineSerial: state.pathParameters['serial']!,
+      ),
+    ),
+    GoRoute(
       path: ScreensaverPage.routePath,
       builder: (context, state) => const ScreensaverPage(),
     ),
@@ -129,11 +135,21 @@ class DioClient {
   // requests as well, which needlessly turns every simple read into a CORS
   // "non-simple" request. The JSON content type is set per request instead,
   // only where a body is actually sent.
-  static final Dio dio = Dio(
-    BaseOptions(
-      baseUrl: "https://vending-backend-slfs.onrender.com",
-    ),
-  ); 
+  static final Dio dio =
+      Dio(BaseOptions(baseUrl: "https://vending-backend-slfs.onrender.com"))
+        ..interceptors.add(
+          InterceptorsWrapper(
+            onRequest: (options, handler) {
+              if (options.path.startsWith('/admin-api/')) {
+                final authorization = AdminAuthSession.authorizationHeader;
+                if (authorization != null) {
+                  options.headers['Authorization'] = authorization;
+                }
+              }
+              handler.next(options);
+            },
+          ),
+        );
 }
 
 class MainApp extends ConsumerStatefulWidget {
@@ -171,7 +187,8 @@ class _MainAppState extends ConsumerState<MainApp> {
         debugShowCheckedModeBanner: false,
         title: 'Shot Demo',
         theme: ThemeData(
-          colorScheme: ColorScheme.fromSeed(seedColor: Colors.brown),),
+          colorScheme: ColorScheme.fromSeed(seedColor: Colors.brown),
+        ),
         routerConfig: _router,
         // Show the error simulation button in the corner of every page.
         builder: (context, child) {
@@ -182,12 +199,7 @@ class _MainAppState extends ConsumerState<MainApp> {
           // out". WidgetOrderTraversalPolicy needs no geometry, so it's safe.
           return FocusTraversalGroup(
             policy: WidgetOrderTraversalPolicy(),
-            child: Stack(
-              children: [
-                ?child,
-                const ErrorSimulationButton(),
-              ],
-            ),
+            child: Stack(children: [?child, const ErrorSimulationButton()]),
           );
         },
       ),

@@ -33,6 +33,7 @@ class InactivityService {
   /// resets state on them, but the user stays where they are.
   static const Set<String> exemptRoutes = {
     ErrorSimulationButton.routePath,
+    '/admin/machines',
     '/online_payment',
     '/card_swipe',
   };
@@ -137,7 +138,8 @@ class InactivityService {
 
     // Exempt pages stay where they are; everything else shows the screensaver
     final location = router.routerDelegate.currentConfiguration.uri.path;
-    if (exemptRoutes.contains(location)) {
+    if (exemptRoutes.contains(location) ||
+      location.startsWith('/admin/machines/')) {
       // Keep the timer armed so leaving the page still has a countdown.
       reset();
       return;
