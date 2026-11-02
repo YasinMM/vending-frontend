@@ -278,7 +278,6 @@ class _AdminMachineDetailsPageState extends State<AdminMachineDetailsPage> {
                             : _sectionData[section.$1],
                         error: _sectionErrors[section.$1],
                         isLoading: _loadingSections.contains(section.$1),
-                        hasMore: _hasMore(_sectionData[section.$1]),
                         onRetry: () => _loadSection(section.$1, refresh: true),
                         onLoadMore: () =>
                             _loadSection(section.$1, loadMore: true),
@@ -300,7 +299,6 @@ class _AdminSectionView extends StatelessWidget {
     required this.payload,
     required this.error,
     required this.isLoading,
-    required this.hasMore,
     required this.onRetry,
     required this.onLoadMore,
     required this.onUpdateRecord,
@@ -311,7 +309,6 @@ class _AdminSectionView extends StatelessWidget {
   final Map<String, dynamic>? payload;
   final String? error;
   final bool isLoading;
-  final bool hasMore;
   final VoidCallback onRetry;
   final VoidCallback onLoadMore;
   final Future<Map<String, dynamic>> Function(
@@ -357,17 +354,12 @@ class _AdminSectionView extends StatelessWidget {
                 'limit',
                 'total',
               }.contains(entry.key))
-                _renderSectionData(context, entry.key, entry.value),
-            if (hasMore) ...[
-              const SizedBox(height: 12),
-              Center(
-                child: OutlinedButton.icon(
-                  onPressed: isLoading ? null : onLoadMore,
-                  icon: const Icon(Icons.expand_more),
-                  label: const Text('بارگذاری موارد بیشتر'),
+                _renderSectionData(
+                  context,
+                  entry.key,
+                  entry.value,
+                  isLoading: isLoading,
                 ),
-              ),
-            ],
           ],
         ),
         if (isLoading && payload != null)
@@ -381,7 +373,12 @@ class _AdminSectionView extends StatelessWidget {
     );
   }
 
-  Widget _renderSectionData(BuildContext context, String label, dynamic value) {
+  Widget _renderSectionData(
+    BuildContext context,
+    String label,
+    dynamic value, {
+    bool isLoading = false,
+  }) {
     final title = _label(label);
     if (value is Map) {
       final map = Map<String, dynamic>.from(value);
@@ -390,7 +387,14 @@ class _AdminSectionView extends StatelessWidget {
             .whereType<Map>()
             .map((item) => Map<String, dynamic>.from(item))
             .toList();
-        return _recordsTable(context, title, rows, total: map['total']);
+        return _recordsTable(
+          context,
+          title,
+          rows,
+          total: map['total'],
+          hasMore: map['has_more'] == true,
+          isLoading: isLoading,
+        );
       }
       if (map.containsKey('__resource')) {
         return _recordsTable(context, title, [map]);
@@ -422,11 +426,16 @@ class _AdminSectionView extends StatelessWidget {
     String title,
     List<Map<String, dynamic>> records, {
     dynamic total,
+    bool hasMore = false,
+    bool isLoading = false,
   }) {
     return _AdminRecordsTable(
       title: title,
       records: records,
       total: total,
+      hasMore: hasMore,
+      isLoading: isLoading,
+      onLoadMore: onLoadMore,
       flattenRecord: _flattenRecord,
       labelFor: _label,
       onEdit: (record) => _editRecord(context, title, record),
@@ -437,6 +446,15 @@ class _AdminSectionView extends StatelessWidget {
     final flattened = <String, dynamic>{};
     void addValue(String prefix, dynamic value) {
       if (value is Map) {
+        if (value['__resource'] is String) {
+          flattened[prefix] = _RelatedRecords(
+            _label(prefix.split(' · ').last),
+            [Map<String, dynamic>.from(value)],
+            parentRecord: record,
+            parentField: prefix,
+          );
+          return;
+        }
         for (final entry in value.entries) {
           final key = entry.key.toString();
           if (!key.startsWith('__')) {
@@ -464,6 +482,22 @@ class _AdminSectionView extends StatelessWidget {
     final hasLinkedSensor = record['sensor'] is Map;
     for (final entry in record.entries) {
       if (entry.key == 'sensor') continue;
+      final relationName = entry.key.endsWith('_id')
+          ? entry.key.substring(0, entry.key.length - 3)
+          : null;
+      final relatedValue = relationName == null
+          ? null
+          : record[relationName] ??
+                (relationName == 'machine_product' ? record['product'] : null);
+      if (relationName != null && relatedValue is Map) {
+        flattened[entry.key] = _RelatedRecords(
+          _label(relationName),
+          [Map<String, dynamic>.from(relatedValue)],
+          parentRecord: record,
+          parentField: entry.key,
+        );
+        continue;
+      }
       if (hasLinkedSensor && entry.key == 'machine_sensor') {
         flattened[entry.key] = _RelatedRecords(
           _label('sensor'),
@@ -473,7 +507,9 @@ class _AdminSectionView extends StatelessWidget {
         );
         continue;
       }
-      if (!entry.key.startsWith('__')) addValue(entry.key, entry.value);
+      if (!entry.key.startsWith('__') && !entry.key.endsWith('_id')) {
+        addValue(entry.key, entry.value);
+      }
     }
     return flattened;
   }
@@ -497,11 +533,27 @@ class _AdminSectionView extends StatelessWidget {
       for (final entry in record.entries)
         if (entry.value is Map || entry.value is List) entry.key,
     };
+    for (final entry in _flattenRecord(record).entries) {
+      if (entry.value is _RelatedRecords) {
+        relatedFields.add(entry.key);
+        relatedFields.add('${entry.key}_id');
+      }
+    }
+    for (final field in record.keys) {
+      if (field.endsWith('_id') &&
+          record.containsKey(field.substring(0, field.length - 3))) {
+        relatedFields.add(field);
+      }
+    }
     if (record['sensor'] is Map) relatedFields.add('machine_sensor');
     return (record['__editable_fields'] as List? ?? const [])
         .whereType<Map>()
         .map((field) => Map<String, dynamic>.from(field))
-        .where((field) => !relatedFields.contains(field['name']))
+        .where(
+          (field) =>
+              field['relation'] != true &&
+              !relatedFields.contains(field['name']),
+        )
         .toList();
   }
 
@@ -659,6 +711,9 @@ class _AdminRecordsTable extends StatefulWidget {
     required this.flattenRecord,
     required this.labelFor,
     required this.onEdit,
+    required this.onLoadMore,
+    required this.hasMore,
+    required this.isLoading,
     this.total,
   });
 
@@ -668,6 +723,9 @@ class _AdminRecordsTable extends StatefulWidget {
   final Map<String, dynamic> Function(Map<String, dynamic>) flattenRecord;
   final String Function(String) labelFor;
   final ValueChanged<Map<String, dynamic>> onEdit;
+  final VoidCallback onLoadMore;
+  final bool hasMore;
+  final bool isLoading;
 
   @override
   State<_AdminRecordsTable> createState() => _AdminRecordsTableState();
@@ -684,9 +742,17 @@ class _AdminRecordsTableState extends State<_AdminRecordsTable> {
   bool _canEdit(Map<String, dynamic> record) =>
       record['__resource'] is String && record['id'] is num;
 
-  String _display(dynamic value) => value is _RelatedRecords
-      ? '${value.records.length} رکورد مرتبط'
-      : value?.toString() ?? '—';
+  String _display(dynamic value) {
+    if (value is! _RelatedRecords) return value?.toString() ?? '—';
+    if (value.records.length == 1) {
+      final record = value.records.single;
+      for (final field in const ['name', 'serial', 'serial_number']) {
+        final label = record[field]?.toString().trim();
+        if (label != null && label.isNotEmpty) return label;
+      }
+    }
+    return '${value.records.length} رکورد مرتبط';
+  }
 
   List<String> get _allColumns {
     final fields = <String>{};
@@ -897,6 +963,9 @@ class _AdminRecordsTableState extends State<_AdminRecordsTable> {
                         flattenRecord: widget.flattenRecord,
                         labelFor: widget.labelFor,
                         onEdit: widget.onEdit,
+                        onLoadMore: () {},
+                        hasMore: false,
+                        isLoading: false,
                       ),
                     ),
                   ),
@@ -1079,9 +1148,12 @@ class _AdminRecordsTableState extends State<_AdminRecordsTable> {
                   columns: [
                     for (final field in visibleColumns)
                       DataColumn(
-                        label: ConstrainedBox(
-                          constraints: const BoxConstraints(minWidth: 100),
-                          child: Center(child: Text(widget.labelFor(field))),
+                        label: Padding(
+                          padding: const EdgeInsets.only(right: 24),
+                          child: ConstrainedBox(
+                            constraints: const BoxConstraints(minWidth: 124),
+                            child: Center(child: Text(widget.labelFor(field))),
+                          ),
                         ),
                         onSort: (index, ascending) => setState(() {
                           _sortField = field;
@@ -1149,6 +1221,17 @@ class _AdminRecordsTableState extends State<_AdminRecordsTable> {
               child: Text('${records.length} مورد نمایش داده شده'),
             ),
           ),
+          if (widget.hasMore)
+            Padding(
+              padding: const EdgeInsets.only(left: 12, right: 12, bottom: 12),
+              child: Center(
+                child: OutlinedButton.icon(
+                  onPressed: widget.isLoading ? null : widget.onLoadMore,
+                  icon: const Icon(Icons.expand_more),
+                  label: const Text('بارگذاری موارد بیشتر'),
+                ),
+              ),
+            ),
         ],
       ),
     );
@@ -1165,13 +1248,15 @@ class _AdminRecordsTableState extends State<_AdminRecordsTable> {
         ),
         onPressed: () => _showRelatedRecords(value),
         icon: const Icon(Icons.open_in_new, size: 13),
-        label: Text('نمایش (${value.records.length})'),
+        label: Text(
+          value.records.length == 1 && _display(value) != '1 رکورد مرتبط'
+              ? _display(value)
+              : 'نمایش (${value.records.length})',
+        ),
       );
     }
-    return SelectableText(
-      _display(value),
-      textAlign: TextAlign.center,
-      maxLines: 4,
+    return Center(
+      child: Text(_display(value), textAlign: TextAlign.center, maxLines: 4),
     );
   }
 }
