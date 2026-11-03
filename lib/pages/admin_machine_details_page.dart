@@ -38,6 +38,7 @@ class _AdminMachineDetailsPageState extends State<AdminMachineDetailsPage> {
   final Map<String, int> _nextOffsets = {};
   final Set<String> _loadingSections = {};
   bool _prefetchStarted = false;
+  int _selectedSectionIndex = 0;
 
   bool get _isAuthenticated => AdminAuthSession.isAuthenticated;
 
@@ -66,7 +67,7 @@ class _AdminMachineDetailsPageState extends State<AdminMachineDetailsPage> {
     setState(() {
       _loadingSections.add(section);
       _sectionErrors.remove(section);
-      if (refresh) _nextOffsets[section] = 0;
+      if (refresh) _nextOffsets.remove(section);
     });
     try {
       final response = await ProductService.getAdminMachineDetails(
@@ -145,6 +146,9 @@ class _AdminMachineDetailsPageState extends State<AdminMachineDetailsPage> {
     }
     if (!mounted) return updated;
     setState(() {
+      if (resource == 'machine') {
+        _machineData = {...?_machineData, ...updated};
+      }
       for (final section in _sectionData.keys.toList()) {
         _sectionData[section] = Map<String, dynamic>.from(
           _replaceRecord(_sectionData[section]!, resource, recordId, updated)
@@ -240,7 +244,24 @@ class _AdminMachineDetailsPageState extends State<AdminMachineDetailsPage> {
         length: _sections.length,
         child: Scaffold(
           appBar: AppBar(
-            title: Text('دستگاه ${widget.machineSerial}'),
+            title: Row(
+              children: [
+                Flexible(child: Text('دستگاه ${widget.machineSerial}')),
+                IconButton(
+                  tooltip: 'بروزرسانی بخش',
+                  onPressed:
+                      _loadingSections.contains(
+                        _sections[_selectedSectionIndex].$1,
+                      )
+                      ? null
+                      : () => _loadSection(
+                          _sections[_selectedSectionIndex].$1,
+                          refresh: true,
+                        ),
+                  icon: const Icon(Icons.refresh),
+                ),
+              ],
+            ),
             actions: [
               if (_isAuthenticated)
                 IconButton(
@@ -257,7 +278,10 @@ class _AdminMachineDetailsPageState extends State<AdminMachineDetailsPage> {
                       for (final section in _sections)
                         Tab(icon: Icon(section.$3), text: section.$2),
                     ],
-                    onTap: (index) => _loadSection(_sections[index].$1),
+                    onTap: (index) {
+                      setState(() => _selectedSectionIndex = index);
+                      _loadSection(_sections[index].$1);
+                    },
                   )
                 : null,
           ),
@@ -267,6 +291,7 @@ class _AdminMachineDetailsPageState extends State<AdminMachineDetailsPage> {
                     for (final section in _sections)
                       _AdminSectionView(
                         machineSerial: widget.machineSerial,
+                        machineRecord: _machineData,
                         title: section.$2,
                         payload:
                             section.$1 == 'overview' &&
@@ -279,6 +304,8 @@ class _AdminMachineDetailsPageState extends State<AdminMachineDetailsPage> {
                         error: _sectionErrors[section.$1],
                         isLoading: _loadingSections.contains(section.$1),
                         onRetry: () => _loadSection(section.$1, refresh: true),
+                        onRefresh: () =>
+                            _loadSection(section.$1, refresh: true),
                         onLoadMore: () =>
                             _loadSection(section.$1, loadMore: true),
                         onUpdateRecord: _updateRecord,
@@ -295,22 +322,26 @@ class _AdminMachineDetailsPageState extends State<AdminMachineDetailsPage> {
 class _AdminSectionView extends StatelessWidget {
   const _AdminSectionView({
     required this.machineSerial,
+    required this.machineRecord,
     required this.title,
     required this.payload,
     required this.error,
     required this.isLoading,
     required this.onRetry,
     required this.onLoadMore,
+    required this.onRefresh,
     required this.onUpdateRecord,
   });
 
   final String machineSerial;
+  final Map<String, dynamic>? machineRecord;
   final String title;
   final Map<String, dynamic>? payload;
   final String? error;
   final bool isLoading;
   final VoidCallback onRetry;
   final VoidCallback onLoadMore;
+  final VoidCallback onRefresh;
   final Future<Map<String, dynamic>> Function(
     String resource,
     int recordId,
@@ -345,7 +376,21 @@ class _AdminSectionView extends StatelessWidget {
         ListView(
           padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
           children: [
-            Text(title, style: Theme.of(context).textTheme.headlineSmall),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    title,
+                    style: Theme.of(context).textTheme.headlineSmall,
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'بروزرسانی $title',
+                  onPressed: isLoading ? null : onRetry,
+                  icon: const Icon(Icons.refresh),
+                ),
+              ],
+            ),
             const SizedBox(height: 16),
             for (final entry in payload!.entries)
               if (!const {
@@ -436,6 +481,7 @@ class _AdminSectionView extends StatelessWidget {
       hasMore: hasMore,
       isLoading: isLoading,
       onLoadMore: onLoadMore,
+      onRefresh: onRefresh,
       flattenRecord: _flattenRecord,
       labelFor: _label,
       onEdit: (record) => _editRecord(context, title, record),
@@ -444,7 +490,12 @@ class _AdminSectionView extends StatelessWidget {
 
   Map<String, dynamic> _flattenRecord(Map<String, dynamic> record) {
     final flattened = <String, dynamic>{};
-    void addValue(String prefix, dynamic value) {
+    void addValue(
+      String prefix,
+      dynamic value, {
+      Map<String, dynamic> choices = const {},
+      String? fieldName,
+    }) {
       if (value is Map) {
         if (value['__resource'] is String) {
           flattened[prefix] = _RelatedRecords(
@@ -455,10 +506,21 @@ class _AdminSectionView extends StatelessWidget {
           );
           return;
         }
+        final displayValues = value['__field_display'] is Map
+            ? Map<String, dynamic>.from(value['__field_display'] as Map)
+            : const <String, dynamic>{};
+        final nestedChoices = value['__field_choices'] is Map
+            ? Map<String, dynamic>.from(value['__field_choices'] as Map)
+            : const <String, dynamic>{};
         for (final entry in value.entries) {
           final key = entry.key.toString();
           if (!key.startsWith('__')) {
-            addValue(prefix.isEmpty ? key : '$prefix · $key', entry.value);
+            addValue(
+              prefix.isEmpty ? key : '$prefix · $key',
+              displayValues.containsKey(key) ? displayValues[key] : entry.value,
+              choices: nestedChoices,
+              fieldName: key,
+            );
           }
         }
       } else if (value is List) {
@@ -475,13 +537,35 @@ class _AdminSectionView extends StatelessWidget {
               )
             : value.map(_displayValue).join('، ');
       } else {
-        flattened[prefix] = value?.toString() ?? '—';
+        final choice = fieldName == null || choices[fieldName] is! Map
+            ? null
+            : (choices[fieldName] as Map)[value?.toString()];
+        flattened[prefix] = choice?.toString() ?? value?.toString() ?? '—';
       }
     }
 
     final hasLinkedSensor = record['sensor'] is Map;
     for (final entry in record.entries) {
       if (entry.key == 'sensor') continue;
+      if (entry.key == 'product') {
+        final machineProduct = record['machine_product'];
+        final productRecord =
+            entry.value is Map &&
+                (entry.value as Map)['__resource'] == 'product'
+            ? entry.value
+            : machineProduct is Map && machineProduct['product'] is Map
+            ? machineProduct['product']
+            : null;
+        if (productRecord is Map && productRecord['__resource'] == 'product') {
+          flattened[entry.key] = _RelatedRecords(
+            _label('product'),
+            [Map<String, dynamic>.from(productRecord)],
+            parentRecord: record,
+            parentField: entry.key,
+          );
+          continue;
+        }
+      }
       final relationName = entry.key.endsWith('_id')
           ? entry.key.substring(0, entry.key.length - 3)
           : null;
@@ -489,10 +573,58 @@ class _AdminSectionView extends StatelessWidget {
           ? null
           : record[relationName] ??
                 (relationName == 'machine_product' ? record['product'] : null);
+      if (relationName == 'machine_product' &&
+          relatedValue is Map &&
+          relatedValue['product'] is Map) {
+        flattened[entry.key] = _RelatedRecords(
+          _label('product'),
+          [Map<String, dynamic>.from(relatedValue['product'] as Map)],
+          parentRecord: record,
+          parentField: entry.key,
+        );
+        continue;
+      }
+      if (entry.key == 'product' &&
+          record['machine_product'] is Map &&
+          (record['machine_product'] as Map)['product'] is Map) {
+        flattened[entry.key] = _RelatedRecords(
+          _label('product'),
+          [
+            Map<String, dynamic>.from(
+              (record['machine_product'] as Map)['product'] as Map,
+            ),
+          ],
+          parentRecord: record,
+          parentField: entry.key,
+        );
+        continue;
+      }
       if (relationName != null && relatedValue is Map) {
         flattened[entry.key] = _RelatedRecords(
           _label(relationName),
           [Map<String, dynamic>.from(relatedValue)],
+          parentRecord: record,
+          parentField: entry.key,
+        );
+        continue;
+      }
+      if (relationName == 'machine' &&
+          machineRecord != null &&
+          record[entry.key] == machineRecord!['id']) {
+        flattened[entry.key] = _RelatedRecords(
+          _label(relationName!),
+          [machineRecord!],
+          parentRecord: record,
+          parentField: entry.key,
+        );
+        continue;
+      }
+      if (entry.key == 'machine' &&
+          machineRecord != null &&
+          record[entry.key] == machineRecord!['id']) {
+        flattened[entry.key] = _RelatedRecords(
+          _label('machine'),
+          [machineRecord!],
           parentRecord: record,
           parentField: entry.key,
         );
@@ -508,7 +640,20 @@ class _AdminSectionView extends StatelessWidget {
         continue;
       }
       if (!entry.key.startsWith('__') && !entry.key.endsWith('_id')) {
-        addValue(entry.key, entry.value);
+        final displayValues = record['__field_display'] is Map
+            ? Map<String, dynamic>.from(record['__field_display'] as Map)
+            : const <String, dynamic>{};
+        final choices = record['__field_choices'] is Map
+            ? Map<String, dynamic>.from(record['__field_choices'] as Map)
+            : const <String, dynamic>{};
+        addValue(
+          entry.key,
+          displayValues.containsKey(entry.key)
+              ? displayValues[entry.key]
+              : entry.value,
+          choices: choices,
+          fieldName: entry.key,
+        );
       }
     }
     return flattened;
@@ -712,6 +857,7 @@ class _AdminRecordsTable extends StatefulWidget {
     required this.labelFor,
     required this.onEdit,
     required this.onLoadMore,
+    required this.onRefresh,
     required this.hasMore,
     required this.isLoading,
     this.total,
@@ -724,6 +870,7 @@ class _AdminRecordsTable extends StatefulWidget {
   final String Function(String) labelFor;
   final ValueChanged<Map<String, dynamic>> onEdit;
   final VoidCallback onLoadMore;
+  final VoidCallback onRefresh;
   final bool hasMore;
   final bool isLoading;
 
@@ -964,6 +1111,7 @@ class _AdminRecordsTableState extends State<_AdminRecordsTable> {
                         labelFor: widget.labelFor,
                         onEdit: widget.onEdit,
                         onLoadMore: () {},
+                        onRefresh: widget.onRefresh,
                         hasMore: false,
                         isLoading: false,
                       ),
@@ -1010,6 +1158,11 @@ class _AdminRecordsTableState extends State<_AdminRecordsTable> {
               children: [
                 Expanded(
                   child: Text(widget.title, style: theme.textTheme.titleMedium),
+                ),
+                IconButton(
+                  tooltip: 'بروزرسانی ${widget.title}',
+                  onPressed: widget.isLoading ? null : widget.onRefresh,
+                  icon: const Icon(Icons.refresh),
                 ),
                 Text(
                   '${records.length}${widget.total is num ? ' · ${widget.total} کل' : ''}',
