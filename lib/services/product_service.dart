@@ -142,6 +142,21 @@ class ProductService {
     );
   }
 
+  static Future<Response> getAdminMachineRelationOptions(
+    String machineSerial, {
+    required String resource,
+    required int recordId,
+    required String field,
+    int offset = 0,
+    int limit = 100,
+  }) {
+    return DioClient.dio.get(
+      '/admin-api/machines/${Uri.encodeComponent(machineSerial)}/records/'
+      '$resource/$recordId/relations/${Uri.encodeComponent(field)}',
+      queryParameters: {'offset': offset, 'limit': limit},
+    );
+  }
+
   /// The contract currently active for [machineSerial]. Responds with 404
   /// when the machine has no active contract.
   static Future<Response> getMachineContract(String machineSerial) {

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
@@ -536,6 +537,18 @@ class _AdminSectionView extends StatelessWidget {
                 parentField: prefix,
               )
             : value.map(_displayValue).join('، ');
+      } else if (value is String) {
+        final decoded = _decodeRecordList(value);
+        if (decoded != null && decoded.isNotEmpty) {
+          flattened[prefix] = _RelatedRecords(
+            _label(prefix.split(' · ').last),
+            decoded,
+            parentRecord: record,
+            parentField: prefix,
+          );
+        } else {
+          flattened[prefix] = value;
+        }
       } else {
         final choice = fieldName == null || choices[fieldName] is! Map
             ? null
@@ -544,6 +557,9 @@ class _AdminSectionView extends StatelessWidget {
       }
     }
 
+    final relationDisplays = record['__relation_display'] is Map
+        ? Map<String, dynamic>.from(record['__relation_display'] as Map)
+        : const <String, dynamic>{};
     final hasLinkedSensor = record['sensor'] is Map;
     for (final entry in record.entries) {
       if (entry.key == 'sensor') continue;
@@ -608,6 +624,10 @@ class _AdminSectionView extends StatelessWidget {
         );
         continue;
       }
+      if (relationName == 'person' && record['__person_display'] != null) {
+        flattened[entry.key] = record['__person_display'].toString();
+        continue;
+      }
       if (relationName == 'machine' &&
           machineRecord != null &&
           record[entry.key] == machineRecord!['id']) {
@@ -639,6 +659,10 @@ class _AdminSectionView extends StatelessWidget {
         );
         continue;
       }
+      if (relationDisplays[entry.key] != null) {
+        flattened[entry.key] = relationDisplays[entry.key].toString();
+        continue;
+      }
       if (!entry.key.startsWith('__') && !entry.key.endsWith('_id')) {
         final displayValues = record['__field_display'] is Map
             ? Map<String, dynamic>.from(record['__field_display'] as Map)
@@ -659,6 +683,25 @@ class _AdminSectionView extends StatelessWidget {
     return flattened;
   }
 
+  List<Map<String, dynamic>>? _decodeRecordList(String value) {
+    final trimmed = value.trim();
+    if (!trimmed.startsWith('[') || !trimmed.endsWith(']')) return null;
+    try {
+      final decoded = jsonDecode(trimmed);
+      if (decoded is! List ||
+          decoded.isEmpty ||
+          decoded.any((item) => item is! Map)) {
+        return null;
+      }
+      return decoded
+          .whereType<Map>()
+          .map((item) => Map<String, dynamic>.from(item))
+          .toList();
+    } on FormatException {
+      return null;
+    }
+  }
+
   String _displayValue(dynamic value) {
     if (value is Map) {
       return value.entries
@@ -674,31 +717,10 @@ class _AdminSectionView extends StatelessWidget {
   List<Map<String, dynamic>> _editableFieldsForRecord(
     Map<String, dynamic> record,
   ) {
-    final relatedFields = <String>{
-      for (final entry in record.entries)
-        if (entry.value is Map || entry.value is List) entry.key,
-    };
-    for (final entry in _flattenRecord(record).entries) {
-      if (entry.value is _RelatedRecords) {
-        relatedFields.add(entry.key);
-        relatedFields.add('${entry.key}_id');
-      }
-    }
-    for (final field in record.keys) {
-      if (field.endsWith('_id') &&
-          record.containsKey(field.substring(0, field.length - 3))) {
-        relatedFields.add(field);
-      }
-    }
-    if (record['sensor'] is Map) relatedFields.add('machine_sensor');
     return (record['__editable_fields'] as List? ?? const [])
         .whereType<Map>()
         .map((field) => Map<String, dynamic>.from(field))
-        .where(
-          (field) =>
-              field['relation'] != true &&
-              !relatedFields.contains(field['name']),
-        )
+        .where((field) => field['editable'] != false)
         .toList();
   }
 
@@ -713,6 +735,9 @@ class _AdminSectionView extends StatelessWidget {
       context: context,
       builder: (context) => _AdminRecordEditDialog(
         title: _label(label),
+        machineSerial: machineSerial,
+        resource: resource,
+        recordId: recordId,
         record: record,
         labelFor: _label,
         editableFields: _editableFieldsForRecord(record),
@@ -821,6 +846,7 @@ class _AdminSectionView extends StatelessWidget {
       'last_update': 'آخرین بروزرسانی',
       'contract': 'شناسه قرارداد',
       'user_id': 'شناسه کاربر',
+      'person_id': 'نام / شماره تماس',
       'description': 'توضیحات',
       'code': 'کد',
       'serial_number': 'شماره سریال',
@@ -860,6 +886,9 @@ class _AdminRecordsTable extends StatefulWidget {
     required this.onRefresh,
     required this.hasMore,
     required this.isLoading,
+    this.selectionMode = false,
+    this.selectedRecordIds = const {},
+    this.onToggleRecord,
     this.total,
   });
 
@@ -873,6 +902,9 @@ class _AdminRecordsTable extends StatefulWidget {
   final VoidCallback onRefresh;
   final bool hasMore;
   final bool isLoading;
+  final bool selectionMode;
+  final Set<int> selectedRecordIds;
+  final ValueChanged<int>? onToggleRecord;
 
   @override
   State<_AdminRecordsTable> createState() => _AdminRecordsTableState();
@@ -893,12 +925,39 @@ class _AdminRecordsTableState extends State<_AdminRecordsTable> {
     if (value is! _RelatedRecords) return value?.toString() ?? '—';
     if (value.records.length == 1) {
       final record = value.records.single;
+      final display = _personAwareRecordDisplay(record);
+      if (display.isNotEmpty) return display;
       for (final field in const ['name', 'serial', 'serial_number']) {
         final label = record[field]?.toString().trim();
         if (label != null && label.isNotEmpty) return label;
       }
     }
     return '${value.records.length} رکورد مرتبط';
+  }
+
+  String _personAwareRecordDisplay(Map<String, dynamic> record) {
+    final person = record['person'];
+    if (person is Map) {
+      final fullName = [person['first_name'], person['last_name']]
+          .where((part) => part != null && part.toString().trim().isNotEmpty)
+          .join(' ');
+      final phone = person['phone_number']?.toString().trim() ?? '';
+      final display = [
+        fullName,
+        phone,
+      ].where((part) => part.trim().isNotEmpty).join(' · ');
+      if (display.isNotEmpty) return display;
+    }
+    for (final key in const ['__person_display', '__display_name']) {
+      final value = record[key]?.toString().trim();
+      if (value != null &&
+          value.isNotEmpty &&
+          value != '—' &&
+          value != record['id']?.toString()) {
+        return value;
+      }
+    }
+    return '';
   }
 
   List<String> get _allColumns {
@@ -1137,7 +1196,7 @@ class _AdminRecordsTableState extends State<_AdminRecordsTable> {
         ? null
         : visibleColumns.indexOf(_sortField!);
     final records = _visibleRecords;
-    final hasEditAction = widget.records.any(_canEdit);
+    final hasEditAction = !widget.selectionMode && widget.records.any(_canEdit);
     final statusValues = widget.records
         .map((record) => widget.flattenRecord(record)['status'])
         .whereType<String>()
@@ -1299,6 +1358,13 @@ class _AdminRecordsTableState extends State<_AdminRecordsTable> {
                     theme.colorScheme.surfaceContainerHighest,
                   ),
                   columns: [
+                    if (widget.selectionMode)
+                      const DataColumn(
+                        label: SizedBox(
+                          width: 44,
+                          child: Center(child: Text('انتخاب')),
+                        ),
+                      ),
                     for (final field in visibleColumns)
                       DataColumn(
                         label: Padding(
@@ -1325,6 +1391,20 @@ class _AdminRecordsTableState extends State<_AdminRecordsTable> {
                     for (final record in records)
                       DataRow(
                         cells: [
+                          if (widget.selectionMode)
+                            DataCell(
+                              Checkbox(
+                                value: widget.selectedRecordIds.contains(
+                                  (record['id'] as num?)?.toInt(),
+                                ),
+                                onChanged: (checked) {
+                                  final id = (record['id'] as num).toInt();
+                                  if (widget.onToggleRecord != null) {
+                                    widget.onToggleRecord!(id);
+                                  }
+                                },
+                              ),
+                            ),
                           for (final field in visibleColumns)
                             DataCell(
                               SizedBox(
@@ -1431,12 +1511,18 @@ class _RelatedRecords {
 class _AdminRecordEditDialog extends StatefulWidget {
   const _AdminRecordEditDialog({
     required this.title,
+    required this.machineSerial,
+    required this.resource,
+    required this.recordId,
     required this.record,
     required this.labelFor,
     required this.editableFields,
   });
 
   final String title;
+  final String machineSerial;
+  final String resource;
+  final int recordId;
   final Map<String, dynamic> record;
   final String Function(String) labelFor;
   final List<Map<String, dynamic>> editableFields;
@@ -1448,6 +1534,10 @@ class _AdminRecordEditDialog extends StatefulWidget {
 class _AdminRecordEditDialogState extends State<_AdminRecordEditDialog> {
   final Map<String, TextEditingController> _controllers = {};
   final Map<String, bool> _booleanValues = {};
+  final Map<String, dynamic> _selectedValues = {};
+  final Map<String, String> _relationLabels = {};
+  final Map<String, List<Map<String, dynamic>>> _selectedRecords = {};
+  final Set<String> _loadingRelations = {};
   String? _validationError;
 
   List<Map<String, dynamic>> get _fields => widget.editableFields;
@@ -1457,9 +1547,26 @@ class _AdminRecordEditDialogState extends State<_AdminRecordEditDialog> {
     super.initState();
     for (final field in _fields) {
       final name = field['name'] as String;
-      final value = widget.record[name];
+      final rawValue = widget.record[name];
+      final value = field['relation'] == true
+          ? widget.record['${name}_id'] ??
+                (rawValue is Map ? rawValue['id'] : rawValue)
+          : rawValue ?? widget.record['${name}_id'];
       if (field['type'] == 'BooleanField') {
         _booleanValues[name] = value == true;
+      } else if (field['relation'] == true ||
+          (field['choices'] as List? ?? const []).isNotEmpty) {
+        if (field['multiple'] == true) {
+          _selectedValues[name] = value is List
+              ? value
+                    .map((item) => item is Map ? item['id'] : item)
+                    .whereType<num>()
+                    .map((id) => id.toInt())
+                    .toList()
+              : <int>[];
+        } else {
+          _selectedValues[name] = value is Map ? value['id'] : value;
+        }
       } else {
         _controllers[name] = TextEditingController(
           text: value?.toString() ?? '',
@@ -1483,6 +1590,22 @@ class _AdminRecordEditDialogState extends State<_AdminRecordEditDialog> {
       final type = field['type'] as String;
       if (type == 'BooleanField') {
         values[name] = _booleanValues[name] ?? false;
+        continue;
+      }
+      if (field['relation'] == true ||
+          (field['choices'] as List? ?? const []).isNotEmpty) {
+        final selected = _selectedValues[name];
+        if (field['multiple'] == true) {
+          values[name] = List<dynamic>.from(selected as List? ?? const []);
+        } else if (selected == null && field['nullable'] != true) {
+          setState(
+            () => _validationError =
+                'مقدار ${widget.labelFor(name)} را انتخاب کنید',
+          );
+          return null;
+        } else {
+          values[name] = selected;
+        }
         continue;
       }
       final text = _controllers[name]!.text.trim();
@@ -1524,6 +1647,361 @@ class _AdminRecordEditDialogState extends State<_AdminRecordEditDialog> {
     return values;
   }
 
+  String _relatedRecordsDisplay(List<Map<String, dynamic>> records) {
+    if (records.length == 1) {
+      final record = records.single;
+      final person = record['person'];
+      if (person is Map) {
+        final fullName = [person['first_name'], person['last_name']]
+            .where((part) => part != null && part.toString().trim().isNotEmpty)
+            .join(' ');
+        final phone = person['phone_number']?.toString().trim() ?? '';
+        final personText = [
+          fullName,
+          phone,
+        ].where((part) => part.trim().isNotEmpty).join(' · ');
+        if (personText.isNotEmpty) return personText;
+      }
+      final personDisplay = record['__person_display']?.toString().trim();
+      if (personDisplay != null && personDisplay.isNotEmpty) {
+        return personDisplay;
+      }
+      for (final field in const ['name', 'serial', 'serial_number']) {
+        final value = record[field]?.toString().trim();
+        if (value != null && value.isNotEmpty) return value;
+      }
+      for (final key in const ['__display_name']) {
+        final display = record[key]?.toString().trim();
+        if (display != null &&
+            display.isNotEmpty &&
+            display != '—' &&
+            display != record['id']?.toString()) {
+          return display;
+        }
+      }
+    }
+    return '${records.length} رکورد مرتبط';
+  }
+
+  String _personAwareRecordDisplay(Map<String, dynamic> record) {
+    final person = record['person'];
+    if (person is Map) {
+      final name = [person['first_name'], person['last_name']]
+          .where((part) => part != null && part.toString().trim().isNotEmpty)
+          .join(' ');
+      final phone = person['phone_number']?.toString().trim() ?? '';
+      final display = [
+        name,
+        phone,
+      ].where((part) => part.trim().isNotEmpty).join(' · ');
+      if (display.isNotEmpty) return display;
+    }
+    for (final key in const ['__person_display', '__display_name']) {
+      final value = record[key]?.toString().trim();
+      if (value != null && value.isNotEmpty && value != '—') return value;
+    }
+    return '';
+  }
+
+  dynamic _relationDisplayFor(
+    Map<String, dynamic> record,
+    String key,
+    dynamic value,
+  ) {
+    if (value is Map || value is List) return value;
+    final displays = record['__relation_display'];
+    if (displays is Map && displays[key] != null) {
+      return displays[key].toString();
+    }
+    return value;
+  }
+
+  Future<void> _selectRelation(Map<String, dynamic> field) async {
+    final name = field['name'] as String;
+    if (_loadingRelations.contains(name)) return;
+    final current = _selectedValues[name];
+    setState(() => _loadingRelations.add(name));
+    try {
+      final response = await ProductService.getAdminMachineRelationOptions(
+        widget.machineSerial,
+        resource: widget.resource,
+        recordId: widget.recordId,
+        field: name,
+        limit: 100,
+      );
+      if (!mounted) return;
+      setState(() => _loadingRelations.remove(name));
+      final data = Map<String, dynamic>.from(response.data);
+      final records = <Map<String, dynamic>>[
+        ...(data['items'] as List? ?? const []).whereType<Map>().map(
+          (item) => Map<String, dynamic>.from(item),
+        ),
+      ];
+      final currentRecords = (data['current_records'] as List? ?? const [])
+          .whereType<Map>()
+          .map((item) => Map<String, dynamic>.from(item))
+          .toList();
+      var offset = records.length;
+      var loadingMore = false;
+      if (!mounted) return;
+      final relationMultiple = data['multiple'] == true;
+      final relationMode = data['relation_mode']?.toString();
+      final currentIds = (data['current_ids'] as List? ?? const [])
+          .whereType<num>()
+          .map((id) => id.toInt())
+          .toList();
+      final selection = await showDialog<Map<String, dynamic>>(
+        context: context,
+        builder: (dialogContext) {
+          final multiple = relationMultiple;
+          final selectedIds = <int>{
+            ...currentIds,
+            if (currentIds.isEmpty && multiple && current is List)
+              ...current.whereType<num>().map((value) => value.toInt()),
+            if (currentIds.isEmpty && !multiple && current is num)
+              current.toInt(),
+          };
+          return StatefulBuilder(
+            builder: (context, setDialogState) {
+              return Directionality(
+                textDirection: TextDirection.rtl,
+                child: Dialog.fullscreen(
+                  child: SafeArea(
+                    child: Padding(
+                      padding: const EdgeInsets.all(20),
+                      child: Column(
+                        children: [
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  'انتخاب ${widget.labelFor(name)}',
+                                  style: Theme.of(
+                                    context,
+                                  ).textTheme.headlineSmall,
+                                ),
+                              ),
+                              IconButton(
+                                tooltip: 'بستن',
+                                onPressed: () => Navigator.pop(dialogContext),
+                                icon: const Icon(Icons.close),
+                              ),
+                            ],
+                          ),
+                          Expanded(
+                            child: SingleChildScrollView(
+                              child: _AdminRecordsTable(
+                                title: widget.labelFor(
+                                  field['related_resource']?.toString() ?? name,
+                                ),
+                                records: records,
+                                total: data['total'],
+                                flattenRecord: (record) => {
+                                  if (_personAwareRecordDisplay(
+                                    record,
+                                  ).isNotEmpty)
+                                    'person_display': _personAwareRecordDisplay(
+                                      record,
+                                    ),
+                                  for (final entry in record.entries)
+                                    if (!entry.key.startsWith('__') &&
+                                        entry.key != 'person')
+                                      entry.key:
+                                          (record['__field_display']
+                                                  as Map?)?[entry.key] ??
+                                              _relationDisplayFor(
+                                                record,
+                                                entry.key,
+                                                entry.value,
+                                              ),
+                                },
+                                labelFor: widget.labelFor,
+                                onEdit: (_) {},
+                                onLoadMore: () async {
+                                  if (loadingMore || data['has_more'] != true) {
+                                    return;
+                                  }
+                                  setDialogState(() => loadingMore = true);
+                                  try {
+                                    final nextResponse =
+                                        await ProductService.getAdminMachineRelationOptions(
+                                          widget.machineSerial,
+                                          resource: widget.resource,
+                                          recordId: widget.recordId,
+                                          field: name,
+                                          offset: offset,
+                                        );
+                                    final nextPage = Map<String, dynamic>.from(
+                                      nextResponse.data,
+                                    );
+                                    records.addAll(
+                                      (nextPage['items'] as List? ?? const [])
+                                          .whereType<Map>()
+                                          .map(
+                                            (item) =>
+                                                Map<String, dynamic>.from(item),
+                                          ),
+                                    );
+                                    offset = records.length;
+                                    data['has_more'] = nextPage['has_more'];
+                                  } catch (error) {
+                                    if (context.mounted) {
+                                      ScaffoldMessenger.of(
+                                        context,
+                                      ).showSnackBar(
+                                        const SnackBar(
+                                          content: Text(
+                                            'بارگذاری موارد بیشتر ناموفق بود',
+                                          ),
+                                        ),
+                                      );
+                                    }
+                                  } finally {
+                                    if (context.mounted) {
+                                      setDialogState(() => loadingMore = false);
+                                    }
+                                  }
+                                },
+                                onRefresh: () {},
+                                hasMore: data['has_more'] == true,
+                                isLoading: loadingMore,
+                                selectionMode: true,
+                                selectedRecordIds: selectedIds,
+                                onToggleRecord: (id) => setDialogState(() {
+                                  if (multiple) {
+                                    if (!selectedIds.add(id)) {
+                                      selectedIds.remove(id);
+                                    }
+                                  } else {
+                                    if (selectedIds.contains(id)) {
+                                      selectedIds.clear();
+                                    } else {
+                                      selectedIds
+                                        ..clear()
+                                        ..add(id);
+                                    }
+                                  }
+                                }),
+                              ),
+                            ),
+                          ),
+                          Padding(
+                            padding: const EdgeInsets.only(top: 12),
+                            child: Row(
+                              children: [
+                                Text(
+                                  '${data['total'] ?? records.length} رکورد واجد شرایط · ${selectedIds.length} انتخاب‌شده',
+                                ),
+                                const Spacer(),
+                                TextButton(
+                                  onPressed: () => Navigator.pop(dialogContext),
+                                  child: const Text('لغو'),
+                                ),
+                                const SizedBox(width: 8),
+                                FilledButton(
+                                  onPressed: () =>
+                                      Navigator.pop(dialogContext, {
+                                        'mode': relationMode,
+                                        'ids': selectedIds.toList(),
+                                      }),
+                                  child: const Text('تأیید انتخاب'),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            },
+          );
+        },
+      );
+      if (selection != null && mounted) {
+        final selectedIds = (selection['ids'] as List? ?? const [])
+            .whereType<num>()
+            .map((id) => id.toInt())
+            .toList();
+        final allKnownRecords = [...currentRecords, ...records];
+        final selectedRecords = allKnownRecords
+            .where(
+              (option) => selectedIds.contains((option['id'] as num?)?.toInt()),
+            )
+            .toList();
+        setState(() {
+          _selectedValues[name] = relationMultiple
+              ? selectedIds
+              : selectedIds.isEmpty
+              ? null
+              : selectedIds.first;
+          _selectedRecords[name] = selectedRecords;
+          _relationLabels[name] = _relatedRecordsDisplay(selectedRecords);
+          _validationError = null;
+        });
+      }
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _loadingRelations.remove(name));
+      final detail = error is DioException ? error.response?.data : null;
+      final message = detail is Map
+          ? detail.values.join(' ')
+          : 'بارگذاری گزینه‌های مرتبط ناموفق بود';
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
+    }
+  }
+
+  Future<void> _selectChoice(Map<String, dynamic> field) async {
+    final name = field['name'] as String;
+    final choices = (field['choices'] as List? ?? const [])
+        .whereType<Map>()
+        .toList();
+    final result = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('انتخاب ${widget.labelFor(name)}'),
+        content: SizedBox(
+          width: 420,
+          child: ListView(
+            shrinkWrap: true,
+            children: [
+              if (field['nullable'] == true)
+                ListTile(
+                  title: const Text('—'),
+                  selected: _selectedValues[name] == null,
+                  onTap: () => Navigator.pop(dialogContext, {'value': null}),
+                ),
+              for (final choice in choices)
+                ListTile(
+                  title: Text(choice['label'].toString()),
+                  selected:
+                      choice['value'].toString() ==
+                      _selectedValues[name]?.toString(),
+                  onTap: () =>
+                      Navigator.pop(dialogContext, {'value': choice['value']}),
+                ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('بستن'),
+          ),
+        ],
+      ),
+    );
+    if (result != null && mounted) {
+      setState(() {
+        _selectedValues[name] = result['value'];
+        _validationError = null;
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
@@ -1546,6 +2024,68 @@ class _AdminRecordEditDialogState extends State<_AdminRecordEditDialog> {
                     value: _booleanValues[field['name']] ?? false,
                     onChanged: (value) => setState(
                       () => _booleanValues[field['name'] as String] = value,
+                    ),
+                  )
+                else if (field['relation'] == true)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: InkWell(
+                      onTap: _loadingRelations.contains(field['name'])
+                          ? null
+                          : () => _selectRelation(field),
+                      child: InputDecorator(
+                        decoration: InputDecoration(
+                          labelText: widget.labelFor(field['name'] as String),
+                          border: const OutlineInputBorder(),
+                          suffixIcon: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (field['nullable'] == true &&
+                                  field['multiple'] != true &&
+                                  _selectedValues[field['name']] != null)
+                                IconButton(
+                                  tooltip: 'پاک کردن انتخاب',
+                                  onPressed: () => setState(
+                                    () =>
+                                        _selectedValues[field['name']
+                                                as String] =
+                                            null,
+                                  ),
+                                  icon: const Icon(Icons.clear),
+                                ),
+                              if (_loadingRelations.contains(field['name']))
+                                const Padding(
+                                  padding: EdgeInsets.all(12),
+                                  child: SizedBox(
+                                    width: 18,
+                                    height: 18,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  ),
+                                )
+                              else
+                                const Icon(Icons.arrow_drop_down),
+                            ],
+                          ),
+                        ),
+                        child: Text(_selectedRelationLabel(field)),
+                      ),
+                    ),
+                  )
+                else if ((field['choices'] as List? ?? const []).isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: InkWell(
+                      onTap: () => _selectChoice(field),
+                      child: InputDecorator(
+                        decoration: InputDecoration(
+                          labelText: widget.labelFor(field['name'] as String),
+                          border: const OutlineInputBorder(),
+                          suffixIcon: const Icon(Icons.arrow_drop_down),
+                        ),
+                        child: Text(_selectedChoiceLabel(field)),
+                      ),
                     ),
                   )
                 else
@@ -1601,5 +2141,65 @@ class _AdminRecordEditDialogState extends State<_AdminRecordEditDialog> {
         ),
       ],
     );
+  }
+
+  String _selectedRelationLabel(Map<String, dynamic> field) {
+    final value = _selectedValues[field['name']];
+    if (field['multiple'] == true ||
+        field['relation_mode'] == 'many_to_many_through') {
+      final ids = value is List ? value : const [];
+      if (ids.isEmpty) return 'برای انتخاب رکوردها لمس کنید';
+      final selectedLabel = _relationLabels[field['name']];
+      return selectedLabel != null && selectedLabel.isNotEmpty
+          ? selectedLabel
+          : '${ids.length} رکورد مرتبط';
+    }
+    if (value == null) return 'برای انتخاب رکورد لمس کنید';
+    final selectedLabel = _relationLabels[field['name']];
+    if (selectedLabel != null && selectedLabel.isNotEmpty) return selectedLabel;
+    final name = field['name'] as String;
+    final cachedRecords = _selectedRecords[name];
+    if (cachedRecords != null && cachedRecords.isNotEmpty) {
+      return _relatedRecordsDisplay(cachedRecords);
+    }
+    final rawId = value is num ? value.toInt() : int.tryParse(value.toString());
+    final related = widget.record[name];
+    if (rawId != null && related is List) {
+      final selectedRecords = related
+          .whereType<Map>()
+          .map((item) => Map<String, dynamic>.from(item))
+          .where((item) => (item['id'] as num?)?.toInt() == rawId)
+          .toList();
+      if (selectedRecords.isNotEmpty) {
+        return _relatedRecordsDisplay(selectedRecords);
+      }
+    }
+    final nested = widget.record[name];
+    if (nested is Map && nested['id']?.toString() == value.toString()) {
+      return _relatedRecordsDisplay([Map<String, dynamic>.from(nested)]);
+    }
+    final relationDisplays = widget.record['__relation_display'];
+    if (relationDisplays is Map && relationDisplays[name] != null) {
+      return relationDisplays[name].toString();
+    }
+    return 'شناسه $value';
+  }
+
+  String _selectedChoiceLabel(Map<String, dynamic> field) {
+    final value = _selectedValues[field['name']];
+    final storedDisplay = widget.record['__field_display'];
+    if (storedDisplay is Map && storedDisplay[field['name']] != null) {
+      final storedValue = widget.record[field['name']];
+      if (storedValue?.toString() == value?.toString()) {
+        return storedDisplay[field['name']].toString();
+      }
+    }
+    for (final choice
+        in (field['choices'] as List? ?? const []).whereType<Map>()) {
+      if (choice['value'].toString() == value?.toString()) {
+        return choice['label'].toString();
+      }
+    }
+    return value == null ? 'برای انتخاب گزینه لمس کنید' : value.toString();
   }
 }
