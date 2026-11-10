@@ -356,9 +356,9 @@ class _AdminSectionView extends StatelessWidget {
       return const Center(child: CircularProgressIndicator());
     }
     if (payload == null || error != null) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
+return Center(
+  child: Column(
+    mainAxisSize: MainAxisSize.min,
           children: [
             Text(error ?? 'اطلاعات این بخش هنوز بارگذاری نشده است'),
             const SizedBox(height: 12),
